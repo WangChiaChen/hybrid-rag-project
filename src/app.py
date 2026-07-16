@@ -8,7 +8,7 @@ import os
 # 這裡把它接進 os.environ，這樣其他模組（agent_router.py 等）原本讀 .env 的
 # os.getenv() 呼叫方式完全不用改，本機開發跟雲端部署共用同一套程式碼。
 try:
-    for _key in ("GEMINI_API_KEY", "EAP_API_BASE_URL", "EAP_API_KEY"):
+    for _key in ("GEMINI_API_KEY", "EAP_API_BASE_URL", "EAP_PROJECT_ID", "EAP_API_KEY"):
         if _key in st.secrets:
             os.environ[_key] = st.secrets[_key]
 except Exception:
@@ -318,16 +318,25 @@ with tab_chat:
     if "history" not in st.session_state:
         st.session_state.history = []
 
+    use_eap = st.toggle(
+        "🔌 使用 EAP 平台回答（需先在 EAP 後台匯入資料，並在 .env 填好 EAP_PROJECT_ID / EAP_API_KEY）",
+        value=False,
+        key="use_eap_toggle"
+    )
+
     for entry in st.session_state.history:
         with st.chat_message(entry["role"]):
             if entry["role"] == "user":
                 st.write(entry["content"])
             else:
                 route = entry.get("route", "")
-                badge_class = {"CALC": "badge-calc", "NARRATIVE": "badge-narrative", "BOTH": "badge-both"}.get(route, "badge-narrative")
-                badge_label = {"CALC": "精準計算 Graph RAG", "NARRATIVE": "語意檢索 Vector RAG", "BOTH": "雙引擎 Hybrid RAG"}.get(route, "")
-                if badge_label:
-                    st.markdown(f'<span class="badge {badge_class}">{badge_label}</span>', unsafe_allow_html=True)
+                if route == "EAP":
+                    st.markdown('<span class="badge badge-both">EAP 平台回答</span>', unsafe_allow_html=True)
+                else:
+                    badge_class = {"CALC": "badge-calc", "NARRATIVE": "badge-narrative", "BOTH": "badge-both"}.get(route, "badge-narrative")
+                    badge_label = {"CALC": "精準計算 Graph RAG", "NARRATIVE": "語意檢索 Vector RAG", "BOTH": "雙引擎 Hybrid RAG"}.get(route, "")
+                    if badge_label:
+                        st.markdown(f'<span class="badge {badge_class}">{badge_label}</span>', unsafe_allow_html=True)
                 st.write(entry["content"])
                 if entry.get("calc_result"):
                     cr = entry["calc_result"]
@@ -341,7 +350,26 @@ with tab_chat:
                     st.markdown(tags, unsafe_allow_html=True)
 
     question = st.chat_input("問我任何關於財報/法說會的問題...")
-    if question and company and this_period:
+    if question and use_eap:
+        st.session_state.history.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.write(question)
+
+        with st.spinner("正在向 EAP 平台查詢（可能需要一點時間）..."):
+            try:
+                from eap_client import get_or_create_chat, ask_question as eap_ask_question
+                if "eap_chat_id" not in st.session_state:
+                    st.session_state.eap_chat_id = get_or_create_chat()
+                answer_text = eap_ask_question(st.session_state.eap_chat_id, question)
+            except Exception as e:
+                answer_text = f"EAP 平台連線失敗：{e}\n\n請確認 .env 裡的 EAP_API_BASE_URL / EAP_PROJECT_ID / EAP_API_KEY 是否正確。"
+
+        st.session_state.history.append({
+            "role": "assistant", "content": answer_text, "route": "EAP",
+            "calc_result": None, "sources": [],
+        })
+        st.rerun()
+    elif question and company and this_period:
         st.session_state.history.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.write(question)

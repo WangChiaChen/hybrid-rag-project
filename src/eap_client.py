@@ -1,75 +1,101 @@
 """EAP 平台真實 API 封裝
-需要在 .env 填入：
-  EAP_API_BASE_URL=（平台的網址，例如 https://xxx.eap.example.com）
-  EAP_API_KEY=（你的認證金鑰）
+依據官方提供的 Sample Code 撰寫（已確認可用的真實串接方式）
 
-⚠️ 目前認證方式（_headers 函式）是用最常見的 Bearer Token 猜測寫的，
-   還沒有實際文件確認，可能需要調整（見下方說明）。
+比賽範圍只需要用到「聊天 API」：資料匯入是透過 EAP 後台網頁介面手動上傳，
+不是透過我們自己的程式呼叫 API 上傳，所以這支只負責「建立聊天室、問問題、拿答案」。
+
+需要在 .env 填入：
+  EAP_API_BASE_URL=https://cloud.geminidata.com/api/portal/api10
+  EAP_PROJECT_ID=（你的專案 ID，在專案網址列可以找到，例如 .../portal/project/69ec1d70e2d327002b0dfbb5）
+  EAP_API_KEY=（你的專案 Token，在 EAP 後台「管理專案」→「通證管理」→「新增通證」取得）
 """
 import os
+import json
 import requests
 from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-EAP_BASE_URL = os.getenv("EAP_API_BASE_URL", "").rstrip("/")
+EAP_BASE_URL = os.getenv("EAP_API_BASE_URL", "https://cloud.geminidata.com/api/portal/api10").rstrip("/")
+EAP_PROJECT_ID = os.getenv("EAP_PROJECT_ID", "")
 EAP_API_KEY = os.getenv("EAP_API_KEY", "")
 
 
-def _headers(extra=None):
-    headers = {"Authorization": f"Bearer {EAP_API_KEY}"}  # TODO: 確認實際認證方式
-    if extra:
-        headers.update(extra)
-    return headers
+def _headers():
+    return {
+        "Authorization": f"Bearer {EAP_API_KEY}",
+        "x-application-tenant": EAP_PROJECT_ID,
+    }
 
 
-def upload_knowledge(file_path, categories="", labels=""):
-    """PUT /api/v1/import/vector/knowledge
-    上傳 PDF/Excel，直接在 EAP 平台的 Vector 服務裡建立知識項目。
-    取代我們自己寫的 preprocess_pdf.py + vlm_parse.py + vector_rag.py 的入庫流程。
-
-    categories / labels：逗號分隔字串，例如 "銀行,法說會"
-    回傳：平台回傳的文字內容（文件標示為 text/plain）
-    """
-    if not EAP_BASE_URL:
-        raise RuntimeError("請先在 .env 填入 EAP_API_BASE_URL")
-
-    url = f"{EAP_BASE_URL}/api/v1/import/vector/knowledge"
-    with open(file_path, "rb") as f:
-        files = {"file": (os.path.basename(file_path), f, "application/pdf")}
-        data = {"categories": categories, "labels": labels}
-        response = requests.post(url, headers=_headers(), files=files, data=data)
-
+def list_chats():
+    """GET /assistant/chat/list —— 取得目前專案下所有聊天室清單"""
+    response = requests.get(f"{EAP_BASE_URL}/assistant/chat/list", headers=_headers())
     response.raise_for_status()
-    return response.text
+    return response.json().get("data", [])
 
 
-def ask_question(chat_id, question, message_id="", streaming=False):
-    """POST /api/v1/chat/{chat_id}
-    對指定的 chat 問問題，取代 agent_router.py 最後組答案那段。
+def create_chat():
+    """POST /assistant/chat/create —— 建立一個新的聊天室，回傳 chat_id"""
+    response = requests.post(f"{EAP_BASE_URL}/assistant/chat/create", headers=_headers(), json={})
+    response.raise_for_status()
+    return response.json().get("data", {}).get("insertedId")
 
-    ⚠️ 注意：chat_id 是必填參數，代表這支 API 假設你已經先呼叫過
-       「Create a new chat」建立好一個 chat_id。這支還沒有截圖給我看，
-       目前程式裡先留空，需要你補上那支 API 的規格。
 
-    streaming=True 時回傳格式是 text/event-stream（一段一段串流），
-    這裡先只處理 streaming=False 的簡單版本。
+def get_or_create_chat():
+    """方便使用：專案下已經有聊天室就沿用最新的一個，沒有就建立新的，
+    這樣同一次展示連續問問題時可以保留在同一個對話脈絡裡。
     """
-    if not EAP_BASE_URL:
-        raise RuntimeError("請先在 .env 填入 EAP_API_BASE_URL")
+    chats = list_chats()
+    if chats:
+        return chats[-1].get("_id")
+    return create_chat()
 
-    url = f"{EAP_BASE_URL}/api/v1/chat/{chat_id}"
-    payload = {"q": question, "messageId": message_id, "streaming": streaming}
-    response = requests.post(url, headers=_headers(), json=payload)
+
+def ask_question(chat_id, question, streaming=True):
+    """POST /assistant/chat/{chat_id} —— 送出問題，取得回答
+    平台建議用 streaming=True，避免問題複雜時逾時（504）
+    """
+    data = {"q": question, "streaming": streaming}
+    response = requests.post(
+        f"{EAP_BASE_URL}/assistant/chat/{chat_id}",
+        headers=_headers(), json=data, stream=streaming,
+    )
     response.raise_for_status()
 
-    if streaming:
-        return response.text  # TODO: 之後可改成逐段解析 SSE
-    return response.json().get("response", "")
+    if not streaming:
+        return response.json().get("result", "")
+
+    final_result = ""
+    for line in response.iter_lines():
+        if not line:
+            continue
+        decoded = line.decode("utf-8")
+        if decoded.startswith("data: "):
+            json_str = decoded.replace("data: ", "").strip()
+            if json_str:
+                try:
+                    parsed = json.loads(json_str)
+                    if "result" in parsed:
+                        final_result = parsed["result"]
+                except json.JSONDecodeError:
+                    pass
+    return final_result
 
 
 if __name__ == "__main__":
-    # 快速手動測試（需要先在 .env 填好 EAP_API_BASE_URL / EAP_API_KEY）
-    print("EAP_BASE_URL:", EAP_BASE_URL or "（尚未設定）")
-    print("這支檔案目前只有函式定義，實際呼叫測試等 chat_id 建立方式確認後再補")
+    print("EAP_BASE_URL:", EAP_BASE_URL)
+    print("EAP_PROJECT_ID:", EAP_PROJECT_ID or "（尚未設定，請在 .env 填入 EAP_PROJECT_ID）")
+    print("EAP_API_KEY:", "已設定" if EAP_API_KEY else "（尚未設定，請在 .env 填入 EAP_API_KEY）")
+
+    if EAP_PROJECT_ID and EAP_API_KEY:
+        print("\n嘗試建立/取得聊天室並問一個測試問題...")
+        try:
+            chat_id = get_or_create_chat()
+            print("chat_id =", chat_id)
+            answer = ask_question(chat_id, "中信金控2026年第一季的獲利表現如何？")
+            print("平台回應：", answer)
+        except Exception as e:
+            print("失敗，錯誤內容如下（把這段貼給 Claude 看）：")
+            print(e)
