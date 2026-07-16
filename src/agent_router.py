@@ -79,12 +79,28 @@ def route_and_pick_metric(question, available_metrics):
         return "NARRATIVE", None
 
 
+def _short_name(company):
+    """把「玉山金控」這種正式名稱去掉常見後綴，變成「玉山」這種簡稱，方便比對使用者口語問法"""
+    for suffix in ("金融控股", "金控", "控股", "銀行", "集團", "證券", "人壽"):
+        if company.endswith(suffix):
+            short = company[: -len(suffix)]
+            if short:
+                return short
+    return company
+
+
 def detect_mentioned_companies(question, current_company):
-    """偵測問題裡有沒有提到「目前選定公司以外」的其他公司名稱，
+    """偵測問題裡有沒有提到「目前選定公司以外」的其他公司名稱（支援簡稱），
     有的話就當作跨公司問題來處理。回傳的清單第一個一定是目前選定的公司。
     """
     all_companies = list_companies()
-    mentioned = [c for c in all_companies if c != current_company and c in question]
+    mentioned = []
+    for c in all_companies:
+        if c == current_company:
+            continue
+        short = _short_name(c)
+        if c in question or (short and short in question):
+            mentioned.append(c)
     return [current_company] + mentioned
 
 
