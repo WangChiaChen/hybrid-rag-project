@@ -8,6 +8,34 @@ from chromadb.utils import embedding_functions
 embed_fn = embedding_functions.DefaultEmbeddingFunction()
 
 
+# 判斷指標「種類」用的關鍵字。目的是分辨哪些指標可以跨公司直接比大小、
+# 哪些是絕對金額（各家申報單位可能不同，例如中信用百萬元、國泰用億元，不能直接比）。
+_RATIO_KEYWORDS = (
+    "率", "%", "占比", "比重", "ROE", "ROA", "NIM",
+    "利差", "適足", "清償能力", "覆蓋", "存放比", "成長", "年增", "季增",
+)
+_PER_SHARE_KEYWORDS = ("每股", "EPS")
+
+
+def classify_metric(name):
+    """把指標歸類成三種：
+      - "ratio"     ：比率／百分比／成長率（單位無關，可直接跨公司比大小）
+      - "per_share" ：每股類，單位一律是「元」（可直接跨公司比）
+      - "amount"    ：絕對金額（各公司申報單位可能不同，跨公司比較前要先對齊單位）
+    """
+    n = str(name)
+    if any(k in n for k in _PER_SHARE_KEYWORDS):
+        return "per_share"
+    if any(k in n for k in _RATIO_KEYWORDS):
+        return "ratio"
+    return "amount"
+
+
+def is_cross_comparable(name):
+    """這個指標是否「單位無關」、可以放心跨公司直接比大小"""
+    return classify_metric(name) in ("ratio", "per_share")
+
+
 def _cosine_sim(a, b):
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = sum(x * x for x in a) ** 0.5

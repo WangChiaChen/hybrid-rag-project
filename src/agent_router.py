@@ -9,6 +9,7 @@ from google import genai
 from dotenv import load_dotenv
 from vector_rag import query_vector_rag
 from graph_rag import calc_change, list_metrics, list_companies, list_periods
+from metric_alignment import is_cross_comparable
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -125,17 +126,35 @@ def answer_question(question, company, this_period, last_period=None):
     sources = []
 
     if is_cross_company:
-        lines = []
+        comparable_lines = []  # 比率／每股類：單位無關，可直接比大小
+        amount_lines = []      # 絕對金額：各家申報單位可能不同，比較前要留意單位
         for c in companies_in_scope:
             p = _pick_period_for_company(c, company, this_period)
             if not p:
                 continue
             metrics_c = list_metrics(c, p)
-            if metrics_c:
-                metrics_text = "；".join(f"{m['metric']}：{m['value']}" for m in metrics_c)
-                lines.append(f"{c}（{p}）的財務指標：{metrics_text}")
-        if lines:
-            context_parts.append("[跨公司財務數據，全部為真實數字，請直接引用比較，不要自行計算或臆測]\n" + "\n".join(lines))
+            if not metrics_c:
+                continue
+            comparable = [m for m in metrics_c if is_cross_comparable(m["metric"])]
+            amounts = [m for m in metrics_c if not is_cross_comparable(m["metric"])]
+            if comparable:
+                text = "；".join(f"{m['metric']}：{m['value']}" for m in comparable)
+                comparable_lines.append(f"{c}（{p}）：{text}")
+            if amounts:
+                text = "；".join(f"{m['metric']}：{m['value']}" for m in amounts)
+                amount_lines.append(f"{c}（{p}）：{text}")
+
+        if comparable_lines:
+            context_parts.append(
+                "[可直接跨公司比較的指標｜比率／每股／成長率，單位一致，請直接比大小]\n"
+                + "\n".join(comparable_lines)
+            )
+        if amount_lines:
+            context_parts.append(
+                "[絕對金額指標｜注意：各公司申報單位可能不同（例如一家用百萬元、另一家用億元），"
+                "禁止直接比較原始數字大小；若要比較必須先換算成相同單位，無法確定單位時請明講而不要臆測]\n"
+                + "\n".join(amount_lines)
+            )
 
         vec_results = query_vector_rag(question, top_k=10, company=companies_in_scope, period=None)
         docs = vec_results.get("documents", [[]])[0]
@@ -181,7 +200,15 @@ def answer_question(question, company, this_period, last_period=None):
     if not context_parts:
         context_parts.append("（目前知識庫中沒有相關資料，請先執行資料匯入）")
 
-    scope_note = f"（本次比較對象：{'、'.join(companies_in_scope)}）\n" if is_cross_company else ""
+    if is_cross_company:
+        scope_note = (
+            f"（本次比較對象：{'、'.join(companies_in_scope)}）\n"
+            "比較守則：優先使用「可直接跨公司比較的指標」區塊（比率／每股／成長率）做高下判斷；"
+            "「絕對金額」區塊各公司單位可能不同，不得直接比原始數字大小；"
+            "只根據下方提供的數據回答，缺哪一家的資料就如實說明，不要臆測。\n"
+        )
+    else:
+        scope_note = ""
     final_prompt = f"""根據以下真實資料回答問題，不要編造數字：
 {scope_note}{chr(10).join(context_parts)}
 

@@ -84,6 +84,57 @@ def ask_question(chat_id, question, streaming=True):
     return final_result
 
 
+def _short_name(company):
+    """把「國泰金控」去掉後綴變「國泰」，方便比對使用者口語問法"""
+    for suffix in ("金融控股", "金控", "控股", "銀行", "集團", "證券", "人壽"):
+        if company.endswith(suffix):
+            short = company[: -len(suffix)]
+            if short:
+                return short
+    return company
+
+
+def detect_companies_in_question(question, known_companies):
+    """從問題裡找出提到的（已知）公司，支援簡稱。回傳命中清單。"""
+    hits = []
+    for c in known_companies:
+        short = _short_name(c)
+        if c in question or (short and short in question):
+            hits.append(c)
+    return hits
+
+
+def ask_smart(chat_id, question, known_companies, streaming=True):
+    """對 EAP 平台問問題，但針對「跨公司比較」做查詢拆解。
+
+    實測發現：EAP 平台的檢索遇到「中信和國泰比較」這種混合查詢時會撈不到資料、
+    誤答「查不到」；但逐家單獨問績效則完全正常。因此當問題同時提到 2 家以上公司時，
+    改成先逐家各問一次（會成功），再把撈到的數據內嵌進最後一次提問讓平台直接比較，
+    避免平台的檢索器成為瓶頸。單一公司問題則維持原本行為。
+    """
+    companies = detect_companies_in_question(question, known_companies)
+    if len(companies) < 2:
+        return ask_question(chat_id, question, streaming)
+
+    facts = []
+    for c in companies:
+        sub_q = (
+            f"請只查詢並回答「{c}」最近一季的績效重點"
+            f"（稅後淨利、每股盈餘EPS、股東權益報酬率ROE、主要成長率等），只回答這一家。"
+        )
+        ans = ask_question(chat_id, sub_q, streaming)
+        facts.append(f"【{c}】\n{ans.strip()}")
+
+    combined = "\n\n".join(facts)
+    synth_q = (
+        "以下是各公司已經查到的績效數據（皆為真實資料），請直接根據這些數據進行比較，"
+        "不要再說查不到資料。注意：不同公司若金額單位不一致（例如百萬元 vs 億元），"
+        "不得直接比較原始數字大小，應優先用比率／每股／成長率等單位一致的指標比較。\n\n"
+        f"{combined}\n\n原始問題：{question}"
+    )
+    return ask_question(chat_id, synth_q, streaming)
+
+
 if __name__ == "__main__":
     print("EAP_BASE_URL:", EAP_BASE_URL)
     print("EAP_PROJECT_ID:", EAP_PROJECT_ID or "（尚未設定，請在 .env 填入 EAP_PROJECT_ID）")

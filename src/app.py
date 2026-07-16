@@ -246,7 +246,7 @@ with tab_compare:
 
         import pandas as pd
         import plotly.express as px
-        from metric_alignment import align_metrics
+        from metric_alignment import align_metrics, classify_metric
 
         threshold = st.slider(
             "語意相似度門檻（調低可以抓到更多但比較不精確的配對）",
@@ -266,6 +266,7 @@ with tab_compare:
                 rows.append({
                     "指標對照": name, "配對方式": "完全相同",
                     company_a: va, company_b: vb, "相似度": "100%",
+                    "_comparable": classify_metric(name) in ("ratio", "per_share"),
                 })
                 matched_a.add(name)
                 matched_b.add(name)
@@ -286,6 +287,7 @@ with tab_compare:
                     rows.append({
                         "指標對照": f"{p['a']} ≈ {p['b']}", "配對方式": "語意相近",
                         company_a: va, company_b: vb, "相似度": f"{p['similarity']*100:.1f}%",
+                        "_comparable": classify_metric(p["a"]) in ("ratio", "per_share"),
                     })
                 except ValueError:
                     continue
@@ -295,16 +297,31 @@ with tab_compare:
             semantic_count = len(rows) - exact_count
             st.success(f"共找到 {len(rows)} 組可比較指標（完全相同 {exact_count} 組　＋　語意相近 {semantic_count} 組）")
 
-            df = pd.DataFrame(rows)
-            df_melt = df[["指標對照", company_a, company_b]].melt(
-                id_vars="指標對照", var_name="機構", value_name="數值"
-            )
-            fig = px.bar(df_melt, x="指標對照", y="數值", color="機構", barmode="group",
-                         text="數值", color_discrete_sequence=px.colors.qualitative.Set2)
-            fig.update_traces(texttemplate="%{text:,.2f}", textposition="outside")
-            fig.update_layout(margin=dict(t=30, b=30, l=10, r=10), height=460, xaxis_title=None, yaxis_title=None)
-            st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(df.set_index("指標對照"), use_container_width=True)
+            # 只有「比率／每股」這類單位一致的指標可以並排畫長條圖直接比大小；
+            # 「絕對金額」各家申報單位可能不同（百萬元 vs 億元），並排畫圖會誤導，改用表格＋警語呈現
+            comparable_rows = [r for r in rows if r.get("_comparable")]
+            amount_rows = [r for r in rows if not r.get("_comparable")]
+            cols_show = ["指標對照", "配對方式", company_a, company_b, "相似度"]
+
+            if comparable_rows:
+                st.markdown("##### 📊 可直接比較的指標（比率／每股，單位一致）")
+                df_cmp = pd.DataFrame(comparable_rows)
+                df_melt = df_cmp[["指標對照", company_a, company_b]].melt(
+                    id_vars="指標對照", var_name="機構", value_name="數值"
+                )
+                fig = px.bar(df_melt, x="指標對照", y="數值", color="機構", barmode="group",
+                             text="數值", color_discrete_sequence=px.colors.qualitative.Set2)
+                fig.update_traces(texttemplate="%{text:,.2f}", textposition="outside")
+                fig.update_layout(margin=dict(t=30, b=30, l=10, r=10), height=460, xaxis_title=None, yaxis_title=None)
+                st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(df_cmp[cols_show].set_index("指標對照"), use_container_width=True)
+
+            if amount_rows:
+                st.markdown("##### 💰 絕對金額指標（僅列表對照）")
+                st.warning("以下為絕對金額，不同機構的申報單位可能不同（例如一家用百萬元、另一家用億元），"
+                           "請勿直接比較數字大小，需先確認並換算成相同單位。")
+                df_amt = pd.DataFrame(amount_rows)
+                st.dataframe(df_amt[cols_show].set_index("指標對照"), use_container_width=True)
         else:
             st.info("兩家機構目前沒有名稱相同或語意相近的指標可比較，試試把上面的相似度門檻調低，或直接問 Chatbot 進行語意層面的比較。")
 
@@ -357,10 +374,12 @@ with tab_chat:
 
         with st.spinner("正在向 EAP 平台查詢（可能需要一點時間）..."):
             try:
-                from eap_client import get_or_create_chat, ask_question as eap_ask_question
+                from eap_client import get_or_create_chat, ask_smart
                 if "eap_chat_id" not in st.session_state:
                     st.session_state.eap_chat_id = get_or_create_chat()
-                answer_text = eap_ask_question(st.session_state.eap_chat_id, question)
+                # 跨公司比較時，EAP 平台的檢索器對混合查詢會漏抓資料，
+                # ask_smart 會自動拆成逐家查詢再合併比較（見 eap_client.py）
+                answer_text = ask_smart(st.session_state.eap_chat_id, question, list_companies())
             except Exception as e:
                 answer_text = f"EAP 平台連線失敗：{e}\n\n請確認 .env 裡的 EAP_API_BASE_URL / EAP_PROJECT_ID / EAP_API_KEY 是否正確。"
 
