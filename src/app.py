@@ -243,66 +243,75 @@ with tab_compare:
 
         metrics_a = {m["metric"]: m["value"] for m in list_metrics(company_a, period_a)}
         metrics_b = {m["metric"]: m["value"] for m in list_metrics(company_b, period_b)}
-        common = sorted(set(metrics_a) & set(metrics_b))
 
         import pandas as pd
         import plotly.express as px
+        from metric_alignment import align_metrics
 
-        if common:
-            rows = []
-            for name in common:
+        threshold = st.slider(
+            "語意相似度門檻（調低可以抓到更多但比較不精確的配對）",
+            min_value=0.5, max_value=0.95, value=0.7, step=0.05,
+            key="cmp_threshold"
+        )
+
+        rows = []
+        matched_a, matched_b = set(), set()
+
+        # 1. 名稱完全相同的先配對
+        common = sorted(set(metrics_a) & set(metrics_b))
+        for name in common:
+            try:
+                va = float(str(metrics_a[name]).replace(",", ""))
+                vb = float(str(metrics_b[name]).replace(",", ""))
+                rows.append({
+                    "指標對照": name, "配對方式": "完全相同",
+                    company_a: va, company_b: vb, "相似度": "100%",
+                })
+                matched_a.add(name)
+                matched_b.add(name)
+            except ValueError:
+                continue
+
+        # 2. 剩下沒配對到的，用語意相似度找
+        remaining_a = [k for k in metrics_a if k not in matched_a]
+        remaining_b = [k for k in metrics_b if k not in matched_b]
+
+        if remaining_a and remaining_b:
+            with st.spinner("正在用語意相似度尋找用詞不同但意思相近的指標..."):
+                pairs = align_metrics(remaining_a, remaining_b, threshold=threshold)
+            for p in pairs:
                 try:
-                    va = float(str(metrics_a[name]).replace(",", ""))
-                    vb = float(str(metrics_b[name]).replace(",", ""))
-                    rows.append({"指標": name, company_a: va, company_b: vb})
+                    va = float(str(metrics_a[p["a"]]).replace(",", ""))
+                    vb = float(str(metrics_b[p["b"]]).replace(",", ""))
+                    rows.append({
+                        "指標對照": f"{p['a']} ≈ {p['b']}", "配對方式": "語意相近",
+                        company_a: va, company_b: vb, "相似度": f"{p['similarity']*100:.1f}%",
+                    })
                 except ValueError:
                     continue
-            if rows:
-                df = pd.DataFrame(rows)
-                df_melt = df.melt(id_vars="指標", var_name="機構", value_name="數值")
-                fig = px.bar(df_melt, x="指標", y="數值", color="機構", barmode="group",
-                             text="數值", color_discrete_sequence=px.colors.qualitative.Set2)
-                fig.update_traces(texttemplate="%{text:,.2f}", textposition="outside")
-                fig.update_layout(margin=dict(t=30, b=30, l=10, r=10), height=440, xaxis_title=None, yaxis_title=None)
-                st.plotly_chart(fig, use_container_width=True)
-                st.dataframe(df.set_index("指標"), use_container_width=True)
-        else:
-            from metric_alignment import align_metrics
-            with st.spinner("兩家機構用詞不同，正在用語意相似度自動配對..."):
-                pairs = align_metrics(list(metrics_a.keys()), list(metrics_b.keys()), threshold=0.7)
 
-            if pairs:
-                st.success(f"✨ 語意對齊：找到 {len(pairs)} 組意思相近但用詞不同的指標")
-                rows = []
-                for p in pairs:
-                    try:
-                        va = float(str(metrics_a[p["a"]]).replace(",", ""))
-                        vb = float(str(metrics_b[p["b"]]).replace(",", ""))
-                        rows.append({
-                            "指標對照": f"{p['a']} ≈ {p['b']}",
-                            company_a: va,
-                            company_b: vb,
-                            "語意相似度": f"{p['similarity']*100:.1f}%",
-                        })
-                    except ValueError:
-                        continue
-                if rows:
-                    df = pd.DataFrame(rows)
-                    df_melt = df[["指標對照", company_a, company_b]].melt(
-                        id_vars="指標對照", var_name="機構", value_name="數值"
-                    )
-                    fig = px.bar(df_melt, x="指標對照", y="數值", color="機構", barmode="group",
-                                 text="數值", color_discrete_sequence=px.colors.qualitative.Set2)
-                    fig.update_traces(texttemplate="%{text:,.2f}", textposition="outside")
-                    fig.update_layout(margin=dict(t=30, b=30, l=10, r=10), height=440, xaxis_title=None, yaxis_title=None)
-                    st.plotly_chart(fig, use_container_width=True)
-                    st.dataframe(df.set_index("指標對照"), use_container_width=True)
-            else:
-                st.info("兩家機構目前沒有名稱相同或語意相近的指標可比較，可以直接問 Chatbot 進行語意層面的比較。")
-            with st.expander(f"查看 {company_a} {period_a} 的原始指標"):
-                st.write(metrics_a)
-            with st.expander(f"查看 {company_b} {period_b} 的原始指標"):
-                st.write(metrics_b)
+        if rows:
+            exact_count = sum(1 for r in rows if r["配對方式"] == "完全相同")
+            semantic_count = len(rows) - exact_count
+            st.success(f"共找到 {len(rows)} 組可比較指標（完全相同 {exact_count} 組　＋　語意相近 {semantic_count} 組）")
+
+            df = pd.DataFrame(rows)
+            df_melt = df[["指標對照", company_a, company_b]].melt(
+                id_vars="指標對照", var_name="機構", value_name="數值"
+            )
+            fig = px.bar(df_melt, x="指標對照", y="數值", color="機構", barmode="group",
+                         text="數值", color_discrete_sequence=px.colors.qualitative.Set2)
+            fig.update_traces(texttemplate="%{text:,.2f}", textposition="outside")
+            fig.update_layout(margin=dict(t=30, b=30, l=10, r=10), height=460, xaxis_title=None, yaxis_title=None)
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(df.set_index("指標對照"), use_container_width=True)
+        else:
+            st.info("兩家機構目前沒有名稱相同或語意相近的指標可比較，試試把上面的相似度門檻調低，或直接問 Chatbot 進行語意層面的比較。")
+
+        with st.expander(f"查看 {company_a} {period_a} 的原始指標"):
+            st.write(metrics_a)
+        with st.expander(f"查看 {company_b} {period_b} 的原始指標"):
+            st.write(metrics_b)
 
 # ---------- 分頁 3：對話 + 匯出報告 ----------
 with tab_chat:

@@ -1,5 +1,5 @@
 """Phase 4：AI Agent 路由層 —— 判斷問題走 Vector RAG 還是 Graph RAG
-用 Gemini 免費版（已優化：合併呼叫次數以節省免費額度）
+用 Gemini 免費版（已優化：合併呼叫次數以節省免費額度，並支援跨公司問題偵測）
 TODO: 拿到 EAP 平台文件後，把這裡換成 EAP 的對話 API
 """
 import os
@@ -8,9 +8,10 @@ import json
 from google import genai
 from dotenv import load_dotenv
 from vector_rag import query_vector_rag
-from graph_rag import calc_change, list_metrics
+from graph_rag import calc_change, list_metrics, list_companies, list_periods
 
-load_dotenv()
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 
@@ -44,7 +45,7 @@ def call_with_retry(fn, max_retries=4, base_wait=5):
 ROUTE_AND_METRIC_PROMPT = """你是財務問答系統的判斷模組。根據使用者問題，判斷以下兩件事，只回傳 JSON，不要有其他文字：
 
 1. route：這個問題屬於哪一類
-   - "CALC"：只需要精確數字/計算（如「QoQ 是多少」「數值是多少」）
+   - "CALC"：只需要精確數字/計算（如「QoQ 是多少」「數值是多少」「誰比較高」）
    - "NARRATIVE"：只需要語意解釋（如「為什麼下滑」「經理人怎麼說」）
    - "BOTH"：兩者都要
 
@@ -78,48 +79,104 @@ def route_and_pick_metric(question, available_metrics):
         return "NARRATIVE", None
 
 
+def detect_mentioned_companies(question, current_company):
+    """偵測問題裡有沒有提到「目前選定公司以外」的其他公司名稱，
+    有的話就當作跨公司問題來處理。回傳的清單第一個一定是目前選定的公司。
+    """
+    all_companies = list_companies()
+    mentioned = [c for c in all_companies if c != current_company and c in question]
+    return [current_company] + mentioned
+
+
+def _pick_period_for_company(c, current_company, current_period):
+    """目前選定的公司用使用者選的期間；其他被提到的公司則用它最新的期間"""
+    if c == current_company:
+        return current_period
+    periods = list_periods(c)
+    return periods[-1] if periods else None
+
+
 def answer_question(question, company, this_period, last_period=None):
-    """回傳結構化結果。CALC 類問題直接用公式結果組答案，不額外呼叫 LLM，節省額度。"""
-    available = [m["metric"] for m in list_metrics(company, this_period)]
-    route, metric_used = route_and_pick_metric(question, available)
+    """回傳結構化結果。CALC 類問題直接用公式結果組答案，不額外呼叫 LLM，節省額度。
+    如果問題提到其他公司，會自動變成跨公司比較模式。
+    """
+    companies_in_scope = detect_mentioned_companies(question, company)
+    is_cross_company = len(companies_in_scope) > 1
+
+    route, metric_used = None, None
+    if not is_cross_company:
+        available = [m["metric"] for m in list_metrics(company, this_period)]
+        route, metric_used = route_and_pick_metric(question, available)
+    else:
+        # 跨公司問題：用問題本身＋所有相關公司的指標清單一起判斷
+        combined_available = []
+        for c in companies_in_scope:
+            p = _pick_period_for_company(c, company, this_period)
+            if p:
+                combined_available.extend([m["metric"] for m in list_metrics(c, p)])
+        route, _ = route_and_pick_metric(question, list(dict.fromkeys(combined_available)))
 
     calc_result = None
-    if metric_used:
-        current_value = next(
-            (m["value"] for m in list_metrics(company, this_period) if m["metric"] == metric_used),
-            None
-        )
-        change = None
-        if last_period:
-            change = calc_change(company, metric_used, this_period, last_period)
-        if current_value is not None:
-            calc_result = {"metric": metric_used, "value": current_value, "change": change}
-
-    # 純 CALC 且有算出結果 -> 直接組答案，不用再呼叫一次 LLM
-    if route == "CALC" and calc_result:
-        change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
-        answer_text = f"{company} {this_period} 的{calc_result['metric']}為 {calc_result['value']}{change_text}。"
-        return {"answer": answer_text, "route": route, "calc_result": calc_result, "sources": []}
-
-    # NARRATIVE 或 BOTH -> 需要語意檢索 + 一次 LLM 整合
-    sources = []
     context_parts = []
-    if calc_result:
-        change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
-        context_parts.append(f"[精確計算結果] {calc_result['metric']}：{calc_result['value']}{change_text}")
+    sources = []
 
-    vec_results = query_vector_rag(question, top_k=8, company=company, period=this_period)
-    docs = vec_results.get("documents", [[]])[0]
-    metas = vec_results.get("metadatas", [[]])[0]
-    if docs:
-        context_parts.append(f"[相關法說會敘述] {' '.join(docs)}")
-        sources.extend(metas)
+    if route in ("CALC", "BOTH"):
+        if is_cross_company:
+            calc_lines = []
+            for c in companies_in_scope:
+                p = _pick_period_for_company(c, company, this_period)
+                if not p:
+                    continue
+                available_c = [m["metric"] for m in list_metrics(c, p)]
+                _, metric_c = route_and_pick_metric(question, available_c)
+                if metric_c:
+                    value_c = next(
+                        (m["value"] for m in list_metrics(c, p) if m["metric"] == metric_c), None
+                    )
+                    if value_c is not None:
+                        calc_lines.append(f"{c}（{p}）{metric_c}：{value_c}")
+            if calc_lines:
+                context_parts.append("[跨公司精確數據]\n" + "\n".join(calc_lines))
+                calc_result = {"metric": "、".join(companies_in_scope) + " 比較", "value": "；".join(calc_lines), "change": None}
+        else:
+            if metric_used:
+                current_value = next(
+                    (m["value"] for m in list_metrics(company, this_period) if m["metric"] == metric_used),
+                    None
+                )
+                change = None
+                if last_period:
+                    change = calc_change(company, metric_used, this_period, last_period)
+                if current_value is not None:
+                    calc_result = {"metric": metric_used, "value": current_value, "change": change}
+
+            if route == "CALC" and calc_result:
+                change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
+                answer_text = f"{company} {this_period} 的{calc_result['metric']}為 {calc_result['value']}{change_text}。"
+                return {"answer": answer_text, "route": route, "calc_result": calc_result, "sources": []}
+
+            if calc_result:
+                change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
+                context_parts.append(f"[精確計算結果] {calc_result['metric']}：{calc_result['value']}{change_text}")
+
+    if route in ("NARRATIVE", "BOTH"):
+        if is_cross_company:
+            vec_results = query_vector_rag(question, top_k=10, company=companies_in_scope, period=None)
+        else:
+            vec_results = query_vector_rag(question, top_k=8, company=company, period=this_period)
+
+        docs = vec_results.get("documents", [[]])[0]
+        metas = vec_results.get("metadatas", [[]])[0]
+        if docs:
+            context_parts.append(f"[相關法說會敘述] {' '.join(docs)}")
+            sources.extend(metas)
 
     if not context_parts:
         context_parts.append("（目前知識庫中沒有相關資料，請先執行資料匯入）")
 
+    scope_note = f"（本次比較對象：{'、'.join(companies_in_scope)}）\n" if is_cross_company else ""
     final_prompt = f"""根據以下真實資料回答問題，不要編造數字：
-{chr(10).join(context_parts)}
+{scope_note}{chr(10).join(context_parts)}
 
 問題：{question}"""
 

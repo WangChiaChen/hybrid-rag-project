@@ -24,10 +24,11 @@ def index_narrative(doc_id, text, metadata):
 
 
 def query_vector_rag(question, top_k=5, company=None, period=None):
-    """語意檢索。如果指定 company（建議一定要指定），會先撈比較多候選結果，
-    再過濾掉不是這家公司的內容，避免跟其他公司的資料混在一起回答。
+    """語意檢索。company 可以是單一公司名稱字串，也可以是公司名稱的清單（跨公司比較用）。
+    會先撈比較多候選結果，再過濾掉不符合條件的內容。
     """
     if company:
+        companies = [company] if isinstance(company, str) else list(company)
         total = max(collection.count(), 1)
         fetch_n = min(total, 50)
         raw = collection.query(query_texts=[question], n_results=fetch_n)
@@ -37,7 +38,7 @@ def query_vector_rag(question, top_k=5, company=None, period=None):
         filtered = []
         for d, m in zip(docs, metas):
             source = m.get("source", "")
-            if source.startswith(company) and (period is None or period in source):
+            if any(source.startswith(c) for c in companies) and (period is None or period in source):
                 filtered.append((d, m))
 
         filtered = filtered[:top_k]
