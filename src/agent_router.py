@@ -113,79 +113,70 @@ def _pick_period_for_company(c, current_company, current_period):
 
 
 def answer_question(question, company, this_period, last_period=None):
-    """回傳結構化結果。CALC 類問題直接用公式結果組答案，不額外呼叫 LLM，節省額度。
-    如果問題提到其他公司，會自動變成跨公司比較模式。
+    """回傳結構化結果。單一公司的 CALC 類問題直接用公式結果組答案，不額外呼叫 LLM，節省額度。
+    如果問題提到其他公司，會自動切換成跨公司比較模式：不強迫鎖定單一指標，
+    而是把相關公司完整的指標資料交給 LLM 統整回答，避免問題太籠統時硬選錯指標。
     """
     companies_in_scope = detect_mentioned_companies(question, company)
     is_cross_company = len(companies_in_scope) > 1
-
-    route, metric_used = None, None
-    if not is_cross_company:
-        available = [m["metric"] for m in list_metrics(company, this_period)]
-        route, metric_used = route_and_pick_metric(question, available)
-    else:
-        # 跨公司問題：用問題本身＋所有相關公司的指標清單一起判斷
-        combined_available = []
-        for c in companies_in_scope:
-            p = _pick_period_for_company(c, company, this_period)
-            if p:
-                combined_available.extend([m["metric"] for m in list_metrics(c, p)])
-        route, _ = route_and_pick_metric(question, list(dict.fromkeys(combined_available)))
 
     calc_result = None
     context_parts = []
     sources = []
 
-    if route in ("CALC", "BOTH"):
-        if is_cross_company:
-            calc_lines = []
-            for c in companies_in_scope:
-                p = _pick_period_for_company(c, company, this_period)
-                if not p:
-                    continue
-                available_c = [m["metric"] for m in list_metrics(c, p)]
-                _, metric_c = route_and_pick_metric(question, available_c)
-                if metric_c:
-                    value_c = next(
-                        (m["value"] for m in list_metrics(c, p) if m["metric"] == metric_c), None
-                    )
-                    if value_c is not None:
-                        calc_lines.append(f"{c}（{p}）{metric_c}：{value_c}")
-            if calc_lines:
-                context_parts.append("[跨公司精確數據]\n" + "\n".join(calc_lines))
-                calc_result = {"metric": "、".join(companies_in_scope) + " 比較", "value": "；".join(calc_lines), "change": None}
-        else:
-            if metric_used:
-                current_value = next(
-                    (m["value"] for m in list_metrics(company, this_period) if m["metric"] == metric_used),
-                    None
-                )
-                change = None
-                if last_period:
-                    change = calc_change(company, metric_used, this_period, last_period)
-                if current_value is not None:
-                    calc_result = {"metric": metric_used, "value": current_value, "change": change}
+    if is_cross_company:
+        lines = []
+        for c in companies_in_scope:
+            p = _pick_period_for_company(c, company, this_period)
+            if not p:
+                continue
+            metrics_c = list_metrics(c, p)
+            if metrics_c:
+                metrics_text = "；".join(f"{m['metric']}：{m['value']}" for m in metrics_c)
+                lines.append(f"{c}（{p}）的財務指標：{metrics_text}")
+        if lines:
+            context_parts.append("[跨公司財務數據，全部為真實數字，請直接引用比較，不要自行計算或臆測]\n" + "\n".join(lines))
 
-            if route == "CALC" and calc_result:
-                change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
-                answer_text = f"{company} {this_period} 的{calc_result['metric']}為 {calc_result['value']}{change_text}。"
-                return {"answer": answer_text, "route": route, "calc_result": calc_result, "sources": []}
-
-            if calc_result:
-                change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
-                context_parts.append(f"[精確計算結果] {calc_result['metric']}：{calc_result['value']}{change_text}")
-
-    if route in ("NARRATIVE", "BOTH"):
-        if is_cross_company:
-            vec_results = query_vector_rag(question, top_k=10, company=companies_in_scope, period=None)
-        else:
-            vec_results = query_vector_rag(question, top_k=8, company=company, period=this_period)
-
+        vec_results = query_vector_rag(question, top_k=10, company=companies_in_scope, period=None)
         docs = vec_results.get("documents", [[]])[0]
         metas = vec_results.get("metadatas", [[]])[0]
         if docs:
             context_parts.append(f"[相關法說會敘述] {' '.join(docs)}")
             sources.extend(metas)
+
+        route = "BOTH"
+
+    else:
+        available = [m["metric"] for m in list_metrics(company, this_period)]
+        route, metric_used = route_and_pick_metric(question, available)
+
+        if route in ("CALC", "BOTH") and metric_used:
+            current_value = next(
+                (m["value"] for m in list_metrics(company, this_period) if m["metric"] == metric_used),
+                None
+            )
+            change = None
+            if last_period:
+                change = calc_change(company, metric_used, this_period, last_period)
+            if current_value is not None:
+                calc_result = {"metric": metric_used, "value": current_value, "change": change}
+
+        if route == "CALC" and calc_result:
+            change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
+            answer_text = f"{company} {this_period} 的{calc_result['metric']}為 {calc_result['value']}{change_text}。"
+            return {"answer": answer_text, "route": route, "calc_result": calc_result, "sources": []}
+
+        if calc_result:
+            change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
+            context_parts.append(f"[精確計算結果] {calc_result['metric']}：{calc_result['value']}{change_text}")
+
+        if route in ("NARRATIVE", "BOTH"):
+            vec_results = query_vector_rag(question, top_k=8, company=company, period=this_period)
+            docs = vec_results.get("documents", [[]])[0]
+            metas = vec_results.get("metadatas", [[]])[0]
+            if docs:
+                context_parts.append(f"[相關法說會敘述] {' '.join(docs)}")
+                sources.extend(metas)
 
     if not context_parts:
         context_parts.append("（目前知識庫中沒有相關資料，請先執行資料匯入）")
