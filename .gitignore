@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+.env
+vector_db/
+pages/*.png
+outputs/*.docx
+outputs/*.json
+uploads_temp/
+.DS_Store

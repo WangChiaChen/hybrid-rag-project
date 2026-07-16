@@ -1,0 +1,146 @@
+"""Phase 4：AI Agent 路由層 —— 判斷問題走 Vector RAG 還是 Graph RAG
+用 Gemini 免費版（已優化：合併呼叫次數以節省免費額度）
+TODO: 拿到 EAP 平台文件後，把這裡換成 EAP 的對話 API
+"""
+import os
+import time
+import json
+from google import genai
+from dotenv import load_dotenv
+from vector_rag import query_vector_rag
+from graph_rag import calc_change, list_metrics
+
+load_dotenv()
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+
+def call_with_retry(fn, max_retries=4, base_wait=5):
+    """遇到 503（伺服器忙線）或 429 每分鐘額度時自動等待後重試；
+    429 每日額度用完則直接拋出，重試沒有意義"""
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_error = e
+            error_msg = str(e)
+            if "503" in error_msg or "UNAVAILABLE" in error_msg:
+                wait_time = base_wait * (attempt + 1)
+                print(f"  伺服器忙線，{wait_time} 秒後重試（第 {attempt + 1}/{max_retries} 次）...")
+                time.sleep(wait_time)
+            elif ("429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg) and "PerMinute" in error_msg:
+                wait_time = 65
+                print(f"  已達每分鐘請求上限，{wait_time} 秒後重試（第 {attempt + 1}/{max_retries} 次）...")
+                time.sleep(wait_time)
+            elif "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                raise
+            else:
+                raise
+    print(f"\n重試 {max_retries} 次後仍失敗，真正的錯誤訊息如下：")
+    print(f"{last_error}\n")
+    raise RuntimeError(f"重試多次仍失敗：{last_error}")
+
+
+ROUTE_AND_METRIC_PROMPT = """你是財務問答系統的判斷模組。根據使用者問題，判斷以下兩件事，只回傳 JSON，不要有其他文字：
+
+1. route：這個問題屬於哪一類
+   - "CALC"：只需要精確數字/計算（如「QoQ 是多少」「數值是多少」）
+   - "NARRATIVE"：只需要語意解釋（如「為什麼下滑」「經理人怎麼說」）
+   - "BOTH"：兩者都要
+
+2. metric：如果 route 是 CALC 或 BOTH，從下面的指標清單中選出最相關的一個，原封不動照抄名稱；如果都不相關或 route 是 NARRATIVE，填 null
+
+可用指標清單：{available_metrics}
+使用者問題：{question}
+
+回傳格式範例：{{"route": "CALC", "metric": "手續費淨收益"}}
+"""
+
+
+def route_and_pick_metric(question, available_metrics):
+    prompt = ROUTE_AND_METRIC_PROMPT.format(
+        available_metrics=available_metrics,
+        question=question
+    )
+    response = call_with_retry(lambda: client.models.generate_content(
+        model="gemini-flash-lite-latest",
+        contents=prompt,
+    ))
+    raw = response.text.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        parsed = json.loads(raw)
+        route = parsed.get("route", "NARRATIVE")
+        metric = parsed.get("metric")
+        if metric not in available_metrics:
+            metric = None
+        return route, metric
+    except json.JSONDecodeError:
+        return "NARRATIVE", None
+
+
+def answer_question(question, company, this_period, last_period=None):
+    """回傳結構化結果。CALC 類問題直接用公式結果組答案，不額外呼叫 LLM，節省額度。"""
+    available = [m["metric"] for m in list_metrics(company, this_period)]
+    route, metric_used = route_and_pick_metric(question, available)
+
+    calc_result = None
+    if metric_used:
+        current_value = next(
+            (m["value"] for m in list_metrics(company, this_period) if m["metric"] == metric_used),
+            None
+        )
+        change = None
+        if last_period:
+            change = calc_change(company, metric_used, this_period, last_period)
+        if current_value is not None:
+            calc_result = {"metric": metric_used, "value": current_value, "change": change}
+
+    # 純 CALC 且有算出結果 -> 直接組答案，不用再呼叫一次 LLM
+    if route == "CALC" and calc_result:
+        change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
+        answer_text = f"{company} {this_period} 的{calc_result['metric']}為 {calc_result['value']}{change_text}。"
+        return {"answer": answer_text, "route": route, "calc_result": calc_result, "sources": []}
+
+    # NARRATIVE 或 BOTH -> 需要語意檢索 + 一次 LLM 整合
+    sources = []
+    context_parts = []
+    if calc_result:
+        change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
+        context_parts.append(f"[精確計算結果] {calc_result['metric']}：{calc_result['value']}{change_text}")
+
+    vec_results = query_vector_rag(question, top_k=8, company=company, period=this_period)
+    docs = vec_results.get("documents", [[]])[0]
+    metas = vec_results.get("metadatas", [[]])[0]
+    if docs:
+        context_parts.append(f"[相關法說會敘述] {' '.join(docs)}")
+        sources.extend(metas)
+
+    if not context_parts:
+        context_parts.append("（目前知識庫中沒有相關資料，請先執行資料匯入）")
+
+    final_prompt = f"""根據以下真實資料回答問題，不要編造數字：
+{chr(10).join(context_parts)}
+
+問題：{question}"""
+
+    response = call_with_retry(lambda: client.models.generate_content(
+        model="gemini-flash-lite-latest",
+        contents=final_prompt,
+    ))
+
+    return {
+        "answer": response.text,
+        "route": route,
+        "calc_result": calc_result,
+        "sources": sources,
+    }
+
+
+if __name__ == "__main__":
+    result = answer_question(
+        "手續費淨收益為什麼變化？變化多少？",
+        company="中信金控",
+        this_period="2026Q1",
+        last_period="2025Q4",
+    )
+    print(result)
