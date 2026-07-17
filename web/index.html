@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>有你蒸好 · 財報分析</title>
+<link rel="stylesheet" href="/style.css">
+<!-- Plotly 走 CDN：不用 npm、不用打包，改完存檔重整就看得到 -->
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap brand">
+    <h1>財報分析，有你真好</h1>
+    <span class="tag">有你蒸好 ｜ Hybrid RAG：Vector RAG ＋ Graph RAG ＋ AI Agent 路由</span>
+  </div>
+</header>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <button class="active" data-tab="dashboard">分析儀表板</button>
+    <button data-tab="compare">跨機構比較</button>
+    <button data-tab="chat">問答與報告</button>
+    <button data-tab="sources">資料來源總覽</button>
+  </div>
+</nav>
+
+<main class="wrap">
+
+  <!-- ===== 儀表板 ===== -->
+  <section id="dashboard">
+    <div class="controls">
+      <div class="field">
+        <label for="company">公司</label>
+        <select id="company"></select>
+      </div>
+      <div class="field">
+        <label for="period">分析期間</label>
+        <select id="period"></select>
+      </div>
+      <div class="field">
+        <label for="lastPeriod">比較期間</label>
+        <select id="lastPeriod"></select>
+      </div>
+    </div>
+
+    <div id="dash-error" class="error hidden"></div>
+
+    <div class="section-head">
+      <h2>關鍵指標</h2>
+      <span class="count" id="metric-count"></span>
+    </div>
+    <div id="cards" class="cards"></div>
+
+    <div class="section-head">
+      <h2>可直接比較的指標</h2>
+      <span class="count">比率／每股，單位一致才畫在同一張圖</span>
+    </div>
+    <div class="panel"><div id="chart"></div></div>
+
+    <p class="note" id="cum-note"></p>
+  </section>
+
+  <!-- ===== 其他分頁（階段 3 再做） ===== -->
+  <section id="compare" class="hidden">
+    <p class="note">跨機構比較 —— 施工中。目前請用 Streamlit 版本。</p>
+  </section>
+  <section id="chat" class="hidden">
+    <p class="note">問答與報告 —— 施工中。目前請用 Streamlit 版本。</p>
+  </section>
+  <section id="sources" class="hidden">
+    <p class="note">資料來源總覽 —— 施工中。目前請用 Streamlit 版本。</p>
+  </section>
+
+  <footer>
+    資料來源：公開資訊觀測站 · 各公司投資人關係網站　｜
+    數值由 Graph RAG 以公式計算，非 LLM 生成
+  </footer>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

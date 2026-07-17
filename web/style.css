@@ -1,0 +1,178 @@
+/* 設計系統：版面邏輯量自財報狗（statementdog.com）——台灣財報分析網站的視覺語言。
+   主色換成專案原本的深藍。
+   核心手法是「灰底 + 白卡」：卡片不靠陰影浮起來，靠背景色差做層次。 */
+:root {
+  --bg: #EDEDED;
+  --card: #FFFFFF;
+  --border: #DFDFDF;
+  --radius: 3px;
+
+  --primary: #1E3A5F;
+  --primary-soft: #E8EDF4;
+
+  /* 台灣慣例：漲/正為紅，跌/負為綠——跟歐美相反 */
+  --up: #EA5E5B;
+  --down: #51A551;
+
+  --text: #1A1D21;
+  --text-2: #434343;
+  --muted: #767C87;
+
+  --font: "PingFang TC", "Microsoft JhengHei", "微軟正黑體", "HanHei TC",
+          "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font);
+  font-size: 16px;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Header ---------- */
+.site-header {
+  background: var(--primary);
+  color: #fff;
+  padding: 18px 0;
+}
+.wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+.brand { display: flex; align-items: baseline; gap: 14px; }
+.brand h1 { font-size: 22px; font-weight: 700; letter-spacing: .5px; }
+.brand .tag { font-size: 13px; color: #CADCFC; }
+
+/* ---------- Nav ---------- */
+.nav { background: var(--card); border-bottom: 1px solid var(--border); }
+.nav-inner { display: flex; gap: 4px; }
+.nav button {
+  font-family: var(--font);
+  font-size: 15px;
+  color: var(--text-2);
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  padding: 14px 18px;
+  cursor: pointer;
+}
+.nav button:hover { color: var(--primary); }
+.nav button.active {
+  color: var(--primary);
+  font-weight: 700;
+  border-bottom-color: var(--primary);
+}
+
+/* ---------- Controls ---------- */
+.controls {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin: 20px 0;
+  display: flex;
+  gap: 22px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12px; color: var(--muted); }
+.field select {
+  font-family: var(--font);
+  font-size: 15px;
+  color: var(--text);
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+  min-width: 150px;
+  cursor: pointer;
+}
+.field select:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+
+/* ---------- Section ---------- */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 26px 0 12px;
+}
+.section-head h2 { font-size: 18px; font-weight: 700; color: var(--text-2); }
+.section-head .count { font-size: 13px; color: var(--muted); }
+
+/* ---------- 指標卡 ---------- */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 13px 15px;
+}
+.card .name {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 7px;
+  line-height: 1.4;
+  min-height: 2.8em;
+}
+.card .val {
+  font-size: 25px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.1;
+}
+.card .unit { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 4px; }
+.card .meta { margin-top: 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+.chip {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+}
+.chip-ratio { background: #EAF4F0; color: #0B5F45; }
+.chip-share { background: #EEF0FA; color: #34407A; }
+.chip-amount { background: #F2F2F2; color: #5A5A5A; }
+/* 累計要看得出來——不然使用者會拿 Q1 的數字去跟前一年 Q4 比 */
+.chip-cum { background: #FDF3E3; color: #8A5200; border-color: #EBD9BB; }
+
+.delta { font-size: 13px; font-weight: 700; }
+.delta.up { color: var(--up); }
+.delta.down { color: var(--down); }
+.delta.na { color: var(--muted); font-weight: 400; font-size: 12px; }
+
+/* ---------- 圖表 ---------- */
+.panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+#chart { width: 100%; height: 420px; }
+
+/* ---------- 狀態 ---------- */
+.note {
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--primary-soft);
+  border: 1px solid #D4DEEB;
+  border-radius: var(--radius);
+  padding: 10px 13px;
+  margin: 12px 0;
+  line-height: 1.6;
+}
+.loading { color: var(--muted); padding: 40px 0; text-align: center; font-size: 14px; }
+.error {
+  color: #8A2A26;
+  background: #FDECEA;
+  border: 1px solid #F3C9C5;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-size: 14px;
+}
+footer { color: var(--muted); font-size: 12px; padding: 30px 0 40px; }
+.hidden { display: none; }

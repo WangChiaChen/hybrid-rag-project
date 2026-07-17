@@ -226,8 +226,9 @@ def report(req: ReportRequest):
     )
 
 
-# React 打包後的靜態檔。要先跑過 `npm run build`（產出在 web/dist）才會存在，
-# 所以這裡容許它不存在——後端可以先獨立開發、測試。
-_DIST = os.path.join(BASE_DIR, "web", "dist")
-if os.path.isdir(_DIST):
-    app.mount("/", StaticFiles(directory=_DIST, html=True), name="spa")
+# 前端是手寫的 HTML/CSS/JS，沒有打包步驟，所以直接掛 web/ 而不是 web/dist。
+# 同源提供，前端 fetch("/api/...") 就不會有 CORS 問題。
+# 這行必須放在所有 /api 路由之後——StaticFiles 掛在 "/" 會吃掉所有沒被前面接走的路徑。
+_WEB = os.path.join(BASE_DIR, "web")
+if os.path.isdir(_WEB):
+    app.mount("/", StaticFiles(directory=_WEB, html=True), name="web")
