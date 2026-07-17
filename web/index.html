@@ -35,23 +35,33 @@
         <label for="company">公司</label>
         <select id="company"></select>
       </div>
-      <div class="field">
-        <label for="period">分析期間</label>
-        <select id="period"></select>
-      </div>
-      <div class="field">
-        <label for="lastPeriod">比較期間</label>
-        <select id="lastPeriod"></select>
+      <!-- 兩個期間選單框在一起、中間放 VS，關係才看得出來 -->
+      <div class="compare-group">
+        <div class="field">
+          <label for="period">分析期間</label>
+          <select id="period"></select>
+        </div>
+        <span class="vs">VS</span>
+        <div class="field">
+          <label for="lastPeriod">比較期間</label>
+          <select id="lastPeriod"></select>
+        </div>
       </div>
     </div>
 
     <div id="dash-error" class="error hidden"></div>
 
-    <div class="section-head">
-      <h2>關鍵指標</h2>
+    <div class="section-head" id="hero-head">
+      <h2>核心指標</h2>
       <span class="count" id="metric-count"></span>
     </div>
-    <div id="cards" class="cards"></div>
+    <div id="hero" class="hero"></div>
+
+    <div class="section-head">
+      <h2>各項指標</h2>
+      <span class="count">依財務意義分組　·　滑鼠移到卡片上可看六期趨勢</span>
+    </div>
+    <div id="groups"></div>
 
     <div class="section-head">
       <h2>可直接比較的指標</h2>

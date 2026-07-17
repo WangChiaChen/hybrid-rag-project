@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from agent_router import answer_question
 from graph_rag import (
+    _PERIOD_RE,
     calc_change,
     is_cumulative,
     list_companies,
@@ -135,6 +136,35 @@ def compare(
         "company_a": company_a, "period_a": period_a,
         "company_b": company_b, "period_b": period_b,
         "rows": rows,
+    }
+
+
+@app.get("/api/trend")
+def trend(company: str = Query(...), metric: str = Query(...)):
+    """單一指標橫跨所有期間的數列，給卡片上的 sparkline 用。
+
+    只回真正的季度（2025Q1…2026Q1），把 "2026Q1財報" 這種非季度標籤排除——
+    那是另一個資料來源，混進趨勢線會讓走勢看起來斷掉。
+    """
+    points = []
+    for p in list_periods(company):
+        if not _PERIOD_RE.match(p):
+            continue
+        hit = next((m for m in list_metrics(company, p) if m["metric"] == metric), None)
+        if not hit:
+            continue
+        try:
+            v = float(str(hit["value"]).replace(",", "").replace("(", "-").replace(")", ""))
+        except ValueError:
+            continue
+        points.append({"period": p, "value": v})
+
+    return {
+        "company": company,
+        "metric": metric,
+        "points": points,
+        # 累計指標的線一定逐季往上、跨年掉回原點，那是重新起算不是趨勢
+        "cumulative": is_cumulative(company, metric),
     }
 
 

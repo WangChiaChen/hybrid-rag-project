@@ -8,9 +8,11 @@
   --radius: 3px;
 
   --primary: #1E3A5F;
+  --primary-2: #2E4E7A;
   --primary-soft: #E8EDF4;
 
-  /* 台灣慣例：漲/正為紅，跌/負為綠——跟歐美相反 */
+  /* 台灣慣例：漲/正為紅，跌/負為綠——跟歐美相反。
+     值量自財報狗，不是憑感覺挑的。 */
   --up: #EA5E5B;
   --down: #51A551;
 
@@ -33,137 +35,196 @@ body {
 }
 
 /* ---------- Header ---------- */
-.site-header {
-  background: var(--primary);
-  color: #fff;
-  padding: 18px 0;
-}
+.site-header { background: var(--primary); color: #fff; padding: 18px 0; }
 .wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
-.brand { display: flex; align-items: baseline; gap: 14px; }
+.brand { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
 .brand h1 { font-size: 22px; font-weight: 700; letter-spacing: .5px; }
 .brand .tag { font-size: 13px; color: #CADCFC; }
 
-/* ---------- Nav ---------- */
+/* ---------- Nav：選中狀態要夠明確，使用者要知道自己在哪一層 ---------- */
 .nav { background: var(--card); border-bottom: 1px solid var(--border); }
-.nav-inner { display: flex; gap: 4px; }
+.nav-inner { display: flex; gap: 2px; }
 .nav button {
   font-family: var(--font);
   font-size: 15px;
-  color: var(--text-2);
+  color: var(--muted);
   background: none;
   border: none;
   border-bottom: 3px solid transparent;
-  padding: 14px 18px;
+  padding: 15px 20px;
   cursor: pointer;
+  transition: color .12s, background .12s;
 }
-.nav button:hover { color: var(--primary); }
+.nav button:hover { color: var(--primary); background: #F7F9FB; }
 .nav button.active {
   color: var(--primary);
   font-weight: 700;
   border-bottom-color: var(--primary);
+  background: var(--primary-soft);
 }
 
-/* ---------- Controls ---------- */
+/* ---------- Controls：兩個期間選單要看得出是「拿來比較的」 ---------- */
 .controls {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px 18px;
-  margin: 20px 0;
+  padding: 18px 20px;
+  margin: 22px 0;
   display: flex;
-  gap: 22px;
+  gap: 18px;
   align-items: flex-end;
   flex-wrap: wrap;
 }
-.field { display: flex; flex-direction: column; gap: 6px; }
+.field { display: flex; flex-direction: column; gap: 7px; }
 .field label { font-size: 12px; color: var(--muted); }
 .field select {
   font-family: var(--font);
   font-size: 15px;
   color: var(--text);
-  padding: 7px 10px;
+  padding: 8px 11px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: #fff;
-  min-width: 150px;
+  min-width: 152px;
   cursor: pointer;
 }
 .field select:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+/* 「VS」把兩個期間選單綁在一起，讓關係一目了然 */
+.vs {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  align-self: flex-end;
+  margin-bottom: 1px;
+}
+.compare-group {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  padding: 10px 12px 10px;
+  background: #FAFBFC;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
 
 /* ---------- Section ---------- */
-.section-head {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin: 26px 0 12px;
-}
+.section-head { display: flex; align-items: baseline; gap: 12px; margin: 30px 0 14px; }
 .section-head h2 { font-size: 18px; font-weight: 700; color: var(--text-2); }
 .section-head .count { font-size: 13px; color: var(--muted); }
 
-/* ---------- 指標卡 ---------- */
+/* ---------- 核心指標（Hero）：關鍵數字要比其他項目搶眼 ---------- */
+.hero {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  gap: 14px;
+  margin-bottom: 8px;
+}
+.hero .card {
+  background: linear-gradient(180deg, #FFFFFF 0%, #FAFCFE 100%);
+  border: 1px solid #C9D6E4;
+  border-top: 3px solid var(--primary);
+  padding: 18px 20px;
+}
+.hero .card .name { font-size: 13px; min-height: auto; margin-bottom: 10px; color: var(--text-2); }
+.hero .card .val { font-size: 34px; }
+
+/* ---------- 一般指標卡 ---------- */
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(224px, 1fr));
+  gap: 14px;
 }
 .card {
+  position: relative;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 13px 15px;
+  padding: 15px 17px;
+  transition: border-color .12s, transform .12s;
 }
+.card:hover { border-color: var(--primary); transform: translateY(-1px); }
+
 .card .name {
   font-size: 12px;
   color: var(--muted);
-  margin-bottom: 7px;
-  line-height: 1.4;
-  min-height: 2.8em;
+  margin-bottom: 8px;
+  line-height: 1.45;
+  min-height: 2.9em;
 }
-.card .val {
-  font-size: 25px;
-  font-weight: 700;
-  color: var(--text);
-  line-height: 1.1;
-}
-.card .unit { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 4px; }
-.card .meta { margin-top: 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.card .val { font-size: 25px; font-weight: 700; color: var(--text); line-height: 1.15; }
+/* 負數用紅字。原始資料是會計式括號 (3,353,168)，括號留著（會計上正確），
+   但顏色讓人一眼看出是流出／虧損。 */
+.card .val.neg { color: var(--up); }
+.card .unit { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 5px; }
 
-.chip {
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: var(--radius);
-  border: 1px solid transparent;
-}
-.chip-ratio { background: #EAF4F0; color: #0B5F45; }
-.chip-share { background: #EEF0FA; color: #34407A; }
-.chip-amount { background: #F2F2F2; color: #5A5A5A; }
-/* 累計要看得出來——不然使用者會拿 Q1 的數字去跟前一年 Q4 比 */
+/* meta 列只有真的有東西才出現——沒內容的空標籤是視覺雜訊 */
+.card .meta { margin-top: 10px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.card .meta:empty { display: none; }
+
+.chip { font-size: 11px; padding: 2px 7px; border-radius: var(--radius); border: 1px solid transparent; }
 .chip-cum { background: #FDF3E3; color: #8A5200; border-color: #EBD9BB; }
 
 .delta { font-size: 13px; font-weight: 700; }
 .delta.up { color: var(--up); }
 .delta.down { color: var(--down); }
-.delta.na { color: var(--muted); font-weight: 400; font-size: 12px; }
+.delta.na { color: var(--muted); font-weight: 400; font-size: 11px; }
+
+/* ---------- Sparkline：滑過才出現，平常不佔視覺 ---------- */
+.spark {
+  height: 30px;
+  margin-top: 10px;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.card:hover .spark { opacity: 1; }
+.spark svg { display: block; width: 100%; height: 30px; overflow: visible; }
+.spark-label {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.card:hover .spark-label { opacity: 1; }
+
+/* ---------- 分組 ---------- */
+.group { margin-bottom: 26px; }
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.group-head .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--primary); }
+.group-head h3 { font-size: 15px; font-weight: 700; color: var(--text-2); }
+.group-head .n { font-size: 12px; color: var(--muted); }
+.group-head .u { font-size: 12px; color: var(--muted); margin-left: auto; }
 
 /* ---------- 圖表 ---------- */
 .panel {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px 18px;
+  padding: 18px 20px;
 }
-#chart { width: 100%; height: 420px; }
+#chart { width: 100%; }
 
 /* ---------- 狀態 ---------- */
 .note {
   font-size: 13px;
-  color: var(--muted);
+  color: var(--text-2);
   background: var(--primary-soft);
   border: 1px solid #D4DEEB;
   border-radius: var(--radius);
-  padding: 10px 13px;
-  margin: 12px 0;
-  line-height: 1.6;
+  padding: 12px 15px;
+  margin: 16px 0;
+  line-height: 1.65;
 }
 .loading { color: var(--muted); padding: 40px 0; text-align: center; font-size: 14px; }
 .error {
@@ -174,5 +235,5 @@ body {
   padding: 12px 14px;
   font-size: 14px;
 }
-footer { color: var(--muted); font-size: 12px; padding: 30px 0 40px; }
+footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height: 1.7; }
 .hidden { display: none; }
