@@ -40,12 +40,25 @@ def is_cumulative_name(name):
     return any(p.search(n) for p in _CUMULATIVE_PATTERNS)
 
 
-def classify_metric(name):
+# 單位若是這些，指標鐵定是比率——比名稱可靠得多。
+# 例如國泰簡報的「國泰世華銀行獲利：17」單位是「百分比」（其實是 +17% 年成長），
+# 名稱裡沒有「率」或「%」，光看名字會誤判成絕對金額，然後被拿去跟別家的獲利金額比。
+_RATIO_UNITS = ("百分比", "%", "bps", "個百分點", "percentage")
+
+
+def classify_metric(name, unit=None):
     """把指標歸類成三種：
       - "ratio"     ：比率／百分比／成長率（單位無關，可直接跨公司比大小）
       - "per_share" ：每股類，單位一律是「元」（可直接跨公司比）
       - "amount"    ：絕對金額（各公司申報單位可能不同，跨公司比較前要先對齊單位）
+
+    有單位就以單位為準，沒有才退回看名稱。
     """
+    if unit:
+        u = str(unit).lower()
+        if any(k in u for k in _RATIO_UNITS):
+            return "ratio"
+
     n = str(name)
     if any(k in n for k in _PER_SHARE_KEYWORDS):
         return "per_share"
@@ -54,9 +67,9 @@ def classify_metric(name):
     return "amount"
 
 
-def is_cross_comparable(name):
+def is_cross_comparable(name, unit=None):
     """這個指標是否「單位無關」、可以放心跨公司直接比大小"""
-    return classify_metric(name) in ("ratio", "per_share")
+    return classify_metric(name, unit) in ("ratio", "per_share")
 
 
 def _cosine_sim(a, b):

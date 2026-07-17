@@ -149,8 +149,8 @@ def answer_question(question, company, this_period, last_period=None):
             metrics_c = list_metrics(c, p)
             if not metrics_c:
                 continue
-            comparable = [m for m in metrics_c if is_cross_comparable(m["metric"])]
-            amounts = [m for m in metrics_c if not is_cross_comparable(m["metric"])]
+            comparable = [m for m in metrics_c if is_cross_comparable(m["metric"], m.get("unit"))]
+            amounts = [m for m in metrics_c if not is_cross_comparable(m["metric"], m.get("unit"))]
             if comparable:
                 text = "；".join(_fmt_metric(m, c) for m in comparable)
                 comparable_lines.append(f"{c}（{p}）：{text}")

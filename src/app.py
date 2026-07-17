@@ -243,6 +243,9 @@ with tab_compare:
 
         metrics_a = {m["metric"]: m["value"] for m in list_metrics(company_a, period_a)}
         metrics_b = {m["metric"]: m["value"] for m in list_metrics(company_b, period_b)}
+        # 單位要留著給 classify_metric 用——名稱看不出是比率還是金額時，單位才是準的
+        units_a = {m["metric"]: m.get("unit") for m in list_metrics(company_a, period_a)}
+        units_b = {m["metric"]: m.get("unit") for m in list_metrics(company_b, period_b)}
 
         import pandas as pd
         import plotly.express as px
@@ -266,7 +269,7 @@ with tab_compare:
                 rows.append({
                     "指標對照": name, "配對方式": "完全相同",
                     company_a: va, company_b: vb, "相似度": "100%",
-                    "_comparable": classify_metric(name) in ("ratio", "per_share"),
+                    "_comparable": classify_metric(name, units_a.get(name)) in ("ratio", "per_share"),
                 })
                 matched_a.add(name)
                 matched_b.add(name)
@@ -287,7 +290,7 @@ with tab_compare:
                     rows.append({
                         "指標對照": f"{p['a']} ≈ {p['b']}", "配對方式": "語意相近",
                         company_a: va, company_b: vb, "相似度": f"{p['similarity']*100:.1f}%",
-                        "_comparable": classify_metric(p["a"]) in ("ratio", "per_share"),
+                        "_comparable": classify_metric(p["a"], units_a.get(p["a"])) in ("ratio", "per_share"),
                     })
                 except ValueError:
                     continue

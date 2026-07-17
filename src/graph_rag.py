@@ -67,6 +67,22 @@ def add_metric_datapoint(company, metric, period, value, unit=None, yoy=None):
     return node_id
 
 
+def remove_period(company, period):
+    """刪掉某公司某期間的全部指標節點，回傳刪除筆數。
+
+    重新匯入同一期間前要先清乾淨——節點是用「公司|指標名稱|期間」當 key，
+    如果換了一份簡報而指標名稱跟著變（例如英文版換成中文版），
+    直接重匯會變成新舊兩套並存，而不是取代。
+    """
+    targets = [
+        n for n, d in G.nodes(data=True)
+        if d["company"] == company and d["period"] == period
+    ]
+    G.remove_nodes_from(targets)
+    save_graph()
+    return len(targets)
+
+
 def ingest_metrics(company, period, key_metrics):
     """key_metrics 是 vlm_parse.py 解析出來的 list，例如：
     [{"指標名稱": "手續費淨收益", "數值": "8054", "單位": "千元", "YoY": "12%"}]
