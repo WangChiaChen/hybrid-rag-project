@@ -5,6 +5,9 @@
 import networkx as nx
 import json
 import os
+import re
+
+from metric_alignment import is_cumulative_name
 
 GRAPH_FILE = os.path.join(os.path.dirname(__file__), "..", "vector_db", "graph_data.json")
 
@@ -83,20 +86,75 @@ def _clean_number(v):
     return float(str(v).replace(",", "").replace("%", ""))
 
 
+_PERIOD_RE = re.compile(r"^(\d{4})Q([1-4])$")
+
+
+def _parse_period(period):
+    """把 "2026Q1" 拆成 (2026, 1)。認不出來就回 None（例如 "2026Q1財報"）"""
+    m = _PERIOD_RE.match(str(period))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def is_cumulative(company, metric):
+    """判斷指標是不是「年初至今累計值」。法說會簡報的獲利／EPS 多半是累計而非單季，
+    直接拿去算 QoQ 會得到假的成長率（累計月數變多而已，不是業績成長）。
+
+    兩種訊號：
+      1. 名稱有標記——「累計」「上半年」「9M25」「1H25」等
+      2. 數值在同一年內逐季遞增——玉山簡報的 EPS 就叫「EPS」，名稱完全看不出來，
+         但 2025 四季是 0.55 → 1.05 → 1.62 → 2.12，一路累加，只能從數列認出來
+    """
+    if is_cumulative_name(metric):
+        return True
+
+    # 依年份收集同一指標的各季數值
+    by_year = {}
+    for _, d in G.nodes(data=True):
+        if d["company"] != company or d["metric"] != metric:
+            continue
+        parsed = _parse_period(d["period"])
+        if not parsed:
+            continue
+        year, q = parsed
+        try:
+            by_year.setdefault(year, {})[q] = _clean_number(d["value"])
+        except ValueError:
+            continue
+
+    # 同一年內至少三季、且逐季嚴格遞增 -> 累計
+    for quarters in by_year.values():
+        if len(quarters) < 3:
+            continue
+        vals = [quarters[q] for q in sorted(quarters)]
+        if all(b > a for a, b in zip(vals, vals[1:])):
+            return True
+    return False
+
+
 def calc_change(company, metric, this_period, last_period):
-    """公式計算核心 —— 直接算，不讓 LLM 猜"""
+    """公式計算核心 —— 直接算，不讓 LLM 猜。
+
+    累計型指標只有「同一季跨年度」能比（例如 2025Q1 vs 2026Q1，都是前三個月累計）。
+    跨季比較（2025Q1 的 3 個月 vs 2025Q3 的 9 個月，或 2025Q4 的 12 個月 vs 2026Q1 的
+    3 個月）算出來的百分比沒有意義，寧可不給數字也不要給錯的。
+    """
     n1 = f"{company}|{metric}|{this_period}"
     n2 = f"{company}|{metric}|{last_period}"
-    if n1 in G.nodes and n2 in G.nodes:
-        try:
-            v1 = _clean_number(G.nodes[n1]["value"])
-            v2 = _clean_number(G.nodes[n2]["value"])
-            if v2 == 0:
-                return None
-            return round((v1 - v2) / v2 * 100, 2)
-        except ValueError:
+    if n1 not in G.nodes or n2 not in G.nodes:
+        return None
+
+    p1, p2 = _parse_period(this_period), _parse_period(last_period)
+    if p1 and p2 and p1[1] != p2[1] and is_cumulative(company, metric):
+        return None
+
+    try:
+        v1 = _clean_number(G.nodes[n1]["value"])
+        v2 = _clean_number(G.nodes[n2]["value"])
+        if v2 == 0:
             return None
-    return None
+        return round((v1 - v2) / v2 * 100, 2)
+    except ValueError:
+        return None
 
 
 def list_companies():

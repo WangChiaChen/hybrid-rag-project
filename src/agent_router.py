@@ -8,7 +8,7 @@ import json
 from google import genai
 from dotenv import load_dotenv
 from vector_rag import query_vector_rag
-from graph_rag import calc_change, list_metrics, list_companies, list_periods
+from graph_rag import calc_change, list_metrics, list_companies, list_periods, is_cumulative
 from metric_alignment import is_cross_comparable
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -105,13 +105,17 @@ def detect_mentioned_companies(question, current_company):
     return [current_company] + mentioned
 
 
-def _fmt_metric(m):
-    """把指標排成給 LLM 看的文字。有單位就一定標出來——單位是跨公司比較能不能比的關鍵。"""
+def _fmt_metric(m, company=None):
+    """把指標排成給 LLM 看的文字。有單位就一定標出來——單位是跨公司比較能不能比的關鍵。
+    累計型指標也要標，否則 LLM 會把「Q4 累計 2.12 → 隔年 Q1 的 0.62」當成暴跌。
+    """
     text = f"{m['metric']}：{m['value']}"
     if m.get("unit"):
         text += f" {m['unit']}"
     if m.get("yoy"):
         text += f"（年增 {m['yoy']}）"
+    if company and is_cumulative(company, m["metric"]):
+        text += "［年初至今累計］"
     return text
 
 
@@ -148,10 +152,10 @@ def answer_question(question, company, this_period, last_period=None):
             comparable = [m for m in metrics_c if is_cross_comparable(m["metric"])]
             amounts = [m for m in metrics_c if not is_cross_comparable(m["metric"])]
             if comparable:
-                text = "；".join(_fmt_metric(m) for m in comparable)
+                text = "；".join(_fmt_metric(m, c) for m in comparable)
                 comparable_lines.append(f"{c}（{p}）：{text}")
             if amounts:
-                text = "；".join(_fmt_metric(m) for m in amounts)
+                text = "；".join(_fmt_metric(m, c) for m in amounts)
                 amount_lines.append(f"{c}（{p}）：{text}")
 
         if comparable_lines:
@@ -215,6 +219,9 @@ def answer_question(question, company, this_period, last_period=None):
             f"（本次比較對象：{'、'.join(companies_in_scope)}）\n"
             "比較守則：優先使用「可直接跨公司比較的指標」區塊（比率／每股／成長率）做高下判斷；"
             "「絕對金額」區塊各公司單位可能不同，不得直接比原始數字大小；"
+            "標示［年初至今累計］的指標是從年初累加到當季，只有同一季跨年度才能比"
+            "（例如去年Q1 vs 今年Q1）；跨季比較沒有意義，尤其新年度第一季的數字必然低於"
+            "前一年第四季，那是重新起算而不是衰退，不要解讀成暴跌；"
             "只根據下方提供的數據回答，缺哪一家的資料就如實說明，不要臆測。\n"
         )
     else:

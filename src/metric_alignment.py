@@ -3,6 +3,7 @@
 用 embedding 語意相似度自動配對，而不是要求文字完全相同。
 這支跟 vector_rag.py 用同一顆本地端 embedding 模型，完全免費、不用呼叫 API。
 """
+import re
 from chromadb.utils import embedding_functions
 
 embed_fn = embedding_functions.DefaultEmbeddingFunction()
@@ -15,6 +16,28 @@ _RATIO_KEYWORDS = (
     "利差", "適足", "清償能力", "覆蓋", "存放比", "成長", "年增", "季增",
 )
 _PER_SHARE_KEYWORDS = ("每股", "EPS")
+
+
+# 「年初至今累計」的名稱標記。法說會簡報的獲利／EPS 常常是累計值而非單季值，
+# 例如中信「合併稅後淨利 (9M25)」是前三季累計、國泰「稅後淨利 (1H25)」是上半年累計。
+_CUMULATIVE_KEYWORDS = ("累計", "累積", "上半年", "前三季", "全年", "年初至今", "YTD")
+# 6M25 / 9M25 / 3M26（N個月累計）、1H25（上半年）、FY24（全年）
+_CUMULATIVE_PATTERNS = (
+    re.compile(r"\d+M\d{2}"),
+    re.compile(r"\b1H\d{2}"),
+    re.compile(r"\bFY\d{2}"),
+)
+
+
+def is_cumulative_name(name):
+    """光看指標名稱能不能判斷它是「累計值」。
+    注意：名稱看不出來不代表不是累計（例如玉山簡報直接叫「EPS」，其實是年初至今累計），
+    那種要靠數列判斷，見 graph_rag.is_cumulative()。
+    """
+    n = str(name)
+    if any(k in n for k in _CUMULATIVE_KEYWORDS):
+        return True
+    return any(p.search(n) for p in _CUMULATIVE_PATTERNS)
 
 
 def classify_metric(name):
