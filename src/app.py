@@ -42,6 +42,16 @@ h1, h2, h3, h4, h5, h6,
                  "Heiti TC", Helvetica, Arial, sans-serif !important;
 }
 
+/* 圖示要排除在上面的字體覆蓋之外。Streamlit 的圖示是 Material Symbols 的
+   ligature——文字 "upload" 在那個字體下才會變成上傳圖示。字體一被換掉，
+   ligature 解不出來，"upload"、"keyboard_arrow_right" 就會以裸文字露出來。 */
+[data-testid="stIconMaterial"],
+.material-icons, .material-symbols-rounded, .material-symbols-outlined,
+span[class*="material-symbols"], span[class*="material-icons"] {
+    font-family: "Material Symbols Rounded", "Material Symbols Outlined",
+                 "Material Icons" !important;
+}
+
 /* 內容寬度。layout="wide" 會撐滿整個螢幕，在寬螢幕上字會拉得很散；
    機構網站多半限制在 1300px 上下置中。 */
 .block-container {
