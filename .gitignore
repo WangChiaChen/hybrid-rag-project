@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 .env
 vector_db/
-pages/*.png
+pages/
 outputs/*.docx
 outputs/*.json
 uploads_temp/
