@@ -1,0 +1,10 @@
+# Streamlit 佈景主題。改這裡不用動任何程式碼，Streamlit Cloud 也會套用。
+# 配色考量：
+#   - 深藍主色 = 金融/專業感，跟 app.py 裡 badge 的粉彩色系（綠/紫/琥珀）搭得起來
+#   - 淺色背景 = 比賽現場的投影機通常偏暗、對比差，深色主題在台上會看不清楚
+[theme]
+primaryColor = "#1E3A5F"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F5F7"
+textColor = "#1A1D21"
+font = "sans serif"
