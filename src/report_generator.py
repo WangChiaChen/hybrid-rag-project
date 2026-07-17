@@ -2,7 +2,11 @@
 from docx import Document
 
 
-def generate_report(company, period, metrics_summary, narrative_summary, output_path):
+def generate_report(company, period, metrics_summary, narrative_summary, output):
+    """output 可以是檔案路徑，也可以是 BytesIO 之類的檔案物件——python-docx 兩種都吃。
+    傳檔案物件就不會落地到伺服器磁碟，前端才能直接讓使用者下載
+    （部署到雲端時，使用者根本碰不到伺服器的檔案系統）。
+    """
     doc = Document()
     doc.add_heading(f"{company} {period} 財務分析報告", level=1)
 
@@ -20,7 +24,7 @@ def generate_report(company, period, metrics_summary, narrative_summary, output_
     doc.add_heading("二、經理人解釋摘要", level=2)
     doc.add_paragraph(narrative_summary or "（無相關敘述資料）")
 
-    doc.save(output_path)
+    doc.save(output)
 
 
 if __name__ == "__main__":
@@ -29,6 +33,6 @@ if __name__ == "__main__":
         period="2026Q1",
         metrics_summary=[{"name": "手續費淨收益", "value": "8054", "change": "3.19"}],
         narrative_summary="手續費淨收益成長主要受惠於財富管理業務回升。",
-        output_path="outputs/sample_report.docx"
+        output="outputs/sample_report.docx"
     )
     print("報告已生成：outputs/sample_report.docx")

@@ -2,6 +2,7 @@
 在專案根目錄執行：streamlit run src/app.py
 """
 import streamlit as st
+import io
 import os
 
 # 部署到 Streamlit Cloud 時，金鑰是放在雲端的 Secrets 設定裡（不是 .env 檔），
@@ -424,14 +425,26 @@ with tab_chat:
             entry["content"] for entry in st.session_state.history if entry["role"] == "assistant"
         ) or "（尚無對話紀錄）"
 
+        # 產生到記憶體而不是伺服器磁碟：部署到雲端時使用者拿不到伺服器上的檔案
+        buffer = io.BytesIO()
         generate_report(
             company=company,
             period=this_period,
             metrics_summary=metrics_summary,
             narrative_summary=narrative_summary,
-            output_path=os.path.join(BASE_DIR, "outputs", "report.docx")
+            output=buffer,
         )
-        st.success("報告已生成，位於 outputs/report.docx")
+        # 存進 session_state，下載按鈕才不會因為 rerun 而消失
+        st.session_state.report_bytes = buffer.getvalue()
+        st.session_state.report_filename = f"{company}_{this_period}_財務分析報告.docx"
+
+    if st.session_state.get("report_bytes"):
+        st.download_button(
+            "⬇️ 下載 Word 報告",
+            data=st.session_state.report_bytes,
+            file_name=st.session_state.report_filename,
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
 
 # ---------- 分頁 3：資料來源總覽 ----------
 with tab_sources:
