@@ -21,7 +21,7 @@ from graph_rag import list_companies, list_periods, list_metrics, calc_change
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-st.set_page_config(page_title="有你蒸好", layout="wide", page_icon="📊")
+st.set_page_config(page_title="有你蒸好", layout="wide", page_icon="📈")
 
 st.markdown("""
 <style>
@@ -49,7 +49,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📊 有你蒸好 —— 財報分析，有你真好")
+st.title("財報分析，有你真好")
 st.caption("Hybrid RAG 架構：Vector RAG（語意檢索）＋ Graph RAG（精準計算）＋ AI Agent 路由")
 
 # ============ 側邊欄：資料範圍選擇 + 上傳新資料 ============
