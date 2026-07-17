@@ -31,10 +31,30 @@ def save_graph():
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def normalize_unit(unit):
+    """把「新臺幣仟元」「新台幣千元」「仟元」這類寫法統一成「千元」。
+
+    VLM 從不同公司的財報抄下來的單位寫法不一致（台／臺、千／仟 混用，實測有 6 種寫法），
+    不統一的話 LLM 會把同一個單位當成不同單位，保留單位的用意就沒了。
+    看不出量級的寫法（例如只寫「元」或「新台幣」）原樣保留，不猜。
+    """
+    if not unit:
+        return unit
+    u = str(unit).strip().replace("臺", "台").replace("仟", "千")
+    if "千元" in u:
+        return "千元"
+    if "百萬" in u:
+        return "百萬元"
+    if "億" in u:
+        return "億元"
+    return u
+
+
 def add_metric_datapoint(company, metric, period, value, unit=None, yoy=None):
     node_id = f"{company}|{metric}|{period}"
     attrs = {"company": company, "metric": metric, "period": period, "value": value}
     # 單位是跨公司比較的關鍵（同樣是「稅後淨利」，財報用千元、簡報用億元，不能直接比大小）
+    unit = normalize_unit(unit)
     if unit:
         attrs["unit"] = unit
     if yoy:
