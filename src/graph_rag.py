@@ -35,21 +35,38 @@ def save_graph():
 
 
 def normalize_unit(unit):
-    """把「新臺幣仟元」「新台幣千元」「仟元」這類寫法統一成「千元」。
+    """統一單位寫法。VLM 是照著各家報表原文抄的，同一個單位實測有 24 種寫法：
+    台／臺、千／仟、百／佰 混用，還混著英文（NT$BN、TWD million）。
+    不統一的話 LLM 會把同一個單位當成不同單位，存單位的用意就沒了。
 
-    VLM 從不同公司的財報抄下來的單位寫法不一致（台／臺、千／仟 混用，實測有 6 種寫法），
-    不統一的話 LLM 會把同一個單位當成不同單位，保留單位的用意就沒了。
-    看不出量級的寫法（例如只寫「元」或「新台幣」）原樣保留，不猜。
+    外幣（越南盾等）原樣保留——那是不同幣別，不能跟台幣混為一談。
+    看不出量級的寫法（「新台幣」「NT$」）也原樣保留，不猜。
     """
     if not unit:
         return unit
-    u = str(unit).strip().replace("臺", "台").replace("仟", "千")
+    u = str(unit).strip()
+
+    # 外幣不碰
+    if any(k in u for k in ("盾", "美元", "USD", "人民幣", "RMB")):
+        return u
+
+    lower = u.lower()
+    if u in ("%", "百分比") or "percentage" in lower:
+        return "%"
+
+    u = u.replace("臺", "台").replace("仟", "千").replace("佰", "百")
     if "千元" in u:
         return "千元"
-    if "百萬" in u:
+    if "百萬" in u or "million" in lower:
         return "百萬元"
+    if "bn" in lower or "billion" in lower:
+        return "十億元"
+    if "兆" in u:
+        return "兆元"
     if "億" in u:
         return "億元"
+    if u in ("元", "新台幣元"):
+        return "元"
     return u
 
 
