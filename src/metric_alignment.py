@@ -81,12 +81,25 @@ def _cosine_sim(a, b):
     return dot / (norm_a * norm_b)
 
 
-def align_metrics(names_a, names_b, threshold=0.75):
+def align_metrics(names_a, names_b, threshold=0.75, units_a=None, units_b=None):
     """回傳語意配對清單：[{"a": 指標A名稱, "b": 指標B名稱, "similarity": 0.xx}]
     只保留相似度超過門檻的配對，每個指標最多配對一次。
+
+    只有「同一種指標類型」才配得起來。embedding 只看字面相似度，分不出
+    「中信銀行資本適足率」（比率）跟「國泰投信稅後淨利」（金額）根本是兩回事，
+    照字面配就會配出這種東西。傳 units 進來讓 classify_metric 判得更準
+    （單位比名稱可靠）。
+
+    型別限制是在配對迴圈裡做的，不是配完才篩：這樣某個指標的最佳匹配若是
+    不同類型，它還能退而求其次找到同類型裡最像的，而不是整個被丟掉。
     """
     if not names_a or not names_b:
         return []
+
+    units_a = units_a or {}
+    units_b = units_b or {}
+    types_a = [classify_metric(n, units_a.get(n)) for n in names_a]
+    types_b = [classify_metric(n, units_b.get(n)) for n in names_b]
 
     embeddings_a = embed_fn(names_a)
     embeddings_b = embed_fn(names_b)
@@ -96,7 +109,7 @@ def align_metrics(names_a, names_b, threshold=0.75):
     for i, name_a in enumerate(names_a):
         best_j, best_score = None, 0
         for j, name_b in enumerate(names_b):
-            if j in used_b:
+            if j in used_b or types_a[i] != types_b[j]:
                 continue
             score = _cosine_sim(embeddings_a[i], embeddings_b[j])
             if score > best_score:

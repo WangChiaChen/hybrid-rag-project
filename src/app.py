@@ -250,84 +250,72 @@ with tab_compare:
 
         import pandas as pd
         import plotly.express as px
-        from metric_alignment import align_metrics, classify_metric
+        from metric_alignment import classify_metric
 
-        threshold = st.slider(
-            "語意相似度門檻（調低可以抓到更多但比較不精確的配對）",
-            min_value=0.5, max_value=0.95, value=0.7, step=0.05,
-            key="cmp_threshold"
-        )
-
+        # 只做「名稱完全相同」的配對。語意配對（align_metrics）先關掉——
+        # Chroma 預設的 embedding 是 all-MiniLM 純英文模型，對中文財務術語沒有鑑別度：
+        # 實測「利息淨收益 vs 放款總額」（無關）拿到 0.984，比「手續費淨收益 vs
+        # 淨手續費收入」（同義）的 0.980 還高，而「每股盈餘 vs EPS」（同義）只有 0.06。
+        # 錯的排在對的前面，門檻調再高也救不了。要恢復語意配對得先換中文 embedding 模型，
+        # 那會需要重建整個向量庫。
         rows = []
-        matched_a, matched_b = set(), set()
-
-        # 1. 名稱完全相同的先配對
-        common = sorted(set(metrics_a) & set(metrics_b))
-        for name in common:
+        for name in sorted(set(metrics_a) & set(metrics_b)):
             try:
                 va = float(str(metrics_a[name]).replace(",", ""))
                 vb = float(str(metrics_b[name]).replace(",", ""))
                 rows.append({
-                    "指標對照": name, "配對方式": "完全相同",
-                    company_a: va, company_b: vb, "相似度": "100%",
+                    "指標": name,
+                    company_a: va, company_b: vb,
+                    "單位": units_a.get(name) or "",
                     "_comparable": classify_metric(name, units_a.get(name)) in ("ratio", "per_share"),
                 })
-                matched_a.add(name)
-                matched_b.add(name)
             except ValueError:
                 continue
 
-        # 2. 剩下沒配對到的，用語意相似度找
-        remaining_a = [k for k in metrics_a if k not in matched_a]
-        remaining_b = [k for k in metrics_b if k not in matched_b]
-
-        if remaining_a and remaining_b:
-            with st.spinner("正在用語意相似度尋找用詞不同但意思相近的指標..."):
-                pairs = align_metrics(remaining_a, remaining_b, threshold=threshold)
-            for p in pairs:
-                try:
-                    va = float(str(metrics_a[p["a"]]).replace(",", ""))
-                    vb = float(str(metrics_b[p["b"]]).replace(",", ""))
-                    rows.append({
-                        "指標對照": f"{p['a']} ≈ {p['b']}", "配對方式": "語意相近",
-                        company_a: va, company_b: vb, "相似度": f"{p['similarity']*100:.1f}%",
-                        "_comparable": classify_metric(p["a"], units_a.get(p["a"])) in ("ratio", "per_share"),
-                    })
-                except ValueError:
-                    continue
-
         if rows:
-            exact_count = sum(1 for r in rows if r["配對方式"] == "完全相同")
-            semantic_count = len(rows) - exact_count
-            st.success(f"共找到 {len(rows)} 組可比較指標（完全相同 {exact_count} 組　＋　語意相近 {semantic_count} 組）")
+            st.success(f"共找到 {len(rows)} 組兩家名稱完全相同的指標")
+            st.caption(
+                "只比對名稱完全相同的指標。用詞不同但同義的（例如「手續費淨收益」vs"
+                "「淨手續費收入」）目前配不起來——Chroma 預設的 embedding 是英文模型，"
+                "對中文財務術語沒有鑑別度，寧可少也不要配錯。"
+            )
 
             # 只有「比率／每股」這類單位一致的指標可以並排畫長條圖直接比大小；
             # 「絕對金額」各家申報單位可能不同（百萬元 vs 億元），並排畫圖會誤導，改用表格＋警語呈現
             comparable_rows = [r for r in rows if r.get("_comparable")]
             amount_rows = [r for r in rows if not r.get("_comparable")]
-            cols_show = ["指標對照", "配對方式", company_a, company_b, "相似度"]
+            cols_show = ["指標", company_a, company_b, "單位"]
 
             if comparable_rows:
                 st.markdown("##### 📊 可直接比較的指標（比率／每股，單位一致）")
                 df_cmp = pd.DataFrame(comparable_rows)
-                df_melt = df_cmp[["指標對照", company_a, company_b]].melt(
-                    id_vars="指標對照", var_name="機構", value_name="數值"
+                df_melt = df_cmp[["指標", company_a, company_b]].melt(
+                    id_vars="指標", var_name="機構", value_name="數值"
                 )
-                fig = px.bar(df_melt, x="指標對照", y="數值", color="機構", barmode="group",
-                             text="數值", color_discrete_sequence=px.colors.qualitative.Set2)
-                fig.update_traces(texttemplate="%{text:,.2f}", textposition="outside")
-                fig.update_layout(margin=dict(t=30, b=30, l=10, r=10), height=460, xaxis_title=None, yaxis_title=None)
+                # 橫條圖：指標名稱是「A ≈ B」這種長字串，直條圖只能把它斜著擺，根本讀不了。
+                # 橫擺就能正常由左讀到右。高度隨指標數成長，否則條會擠在一起。
+                fig = px.bar(df_melt, x="數值", y="指標", color="機構", barmode="group",
+                             orientation="h", text="數值",
+                             color_discrete_sequence=px.colors.qualitative.Set2)
+                fig.update_traces(texttemplate="%{text:,.2f}", textposition="outside", cliponaxis=False)
+                fig.update_layout(
+                    margin=dict(t=30, b=30, l=10, r=60),
+                    height=max(400, len(df_cmp) * 60),
+                    xaxis_title=None, yaxis_title=None,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                )
                 st.plotly_chart(fig, use_container_width=True)
-                st.dataframe(df_cmp[cols_show].set_index("指標對照"), use_container_width=True)
+                st.dataframe(df_cmp[cols_show].set_index("指標"), use_container_width=True)
 
             if amount_rows:
                 st.markdown("##### 💰 絕對金額指標（僅列表對照）")
                 st.warning("以下為絕對金額，不同機構的申報單位可能不同（例如一家用百萬元、另一家用億元），"
                            "請勿直接比較數字大小，需先確認並換算成相同單位。")
                 df_amt = pd.DataFrame(amount_rows)
-                st.dataframe(df_amt[cols_show].set_index("指標對照"), use_container_width=True)
+                st.dataframe(df_amt[cols_show].set_index("指標"), use_container_width=True)
         else:
-            st.info("兩家機構目前沒有名稱相同或語意相近的指標可比較，試試把上面的相似度門檻調低，或直接問 Chatbot 進行語意層面的比較。")
+            st.info("這兩家在所選期間沒有名稱完全相同的指標。可以換個期間試試，或直接問 Chatbot——"
+                    "它能做語意層面的跨公司比較，不受名稱是否相同限制。")
 
         with st.expander(f"查看 {company_a} {period_a} 的原始指標"):
             st.write(metrics_a)
