@@ -2,7 +2,9 @@ venv/
 __pycache__/
 *.pyc
 .env
-vector_db/
+# vector_db/ 刻意進版控：Streamlit Cloud 只會從 repo 拉檔案，
+# 知識庫不在裡面的話部署出去的 app 就是空的（使用者也沒辦法自己重跑解析）。
+# 只有 2.2MB，而且是 demo 專案不是正式系統，值得這個取捨。
 pages/
 outputs/*.docx
 outputs/*.json
