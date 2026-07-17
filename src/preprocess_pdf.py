@@ -5,13 +5,17 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def pdf_to_images(pdf_path, output_dir=None):
+def pdf_to_images(pdf_path, output_dir=None, max_pages=None):
+    """max_pages：只轉前 N 頁。財報動輒 200-300 頁，但通常只解析前面幾十頁，
+    不設限的話會白白多轉上百張 PNG，浪費時間和磁碟。"""
     if output_dir is None:
         output_dir = os.path.join(BASE_DIR, "pages")
     os.makedirs(output_dir, exist_ok=True)
     doc = fitz.open(pdf_path)
     image_paths = []
     for i, page in enumerate(doc):
+        if max_pages is not None and i >= max_pages:
+            break
         pix = page.get_pixmap(dpi=150)
         path = os.path.join(output_dir, f"page_{i + 1}.png")
         pix.save(path)

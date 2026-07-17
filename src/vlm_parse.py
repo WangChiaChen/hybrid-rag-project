@@ -86,7 +86,7 @@ def run_vlm_parse(pdf_path, company, period, max_pages=10, progress_callback=Non
     from preprocess_pdf import pdf_to_images
 
     output_dir = os.path.join(BASE_DIR, "pages", f"{company}_{period}")
-    pages = pdf_to_images(pdf_path, output_dir=output_dir)
+    pages = pdf_to_images(pdf_path, output_dir=output_dir, max_pages=max_pages)
     pages_to_process = pages[:max_pages]
 
     results = []

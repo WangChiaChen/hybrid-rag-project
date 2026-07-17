@@ -31,22 +31,32 @@ def save_graph():
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def add_metric_datapoint(company, metric, period, value):
+def add_metric_datapoint(company, metric, period, value, unit=None, yoy=None):
     node_id = f"{company}|{metric}|{period}"
-    G.add_node(node_id, company=company, metric=metric, period=period, value=value)
+    attrs = {"company": company, "metric": metric, "period": period, "value": value}
+    # 單位是跨公司比較的關鍵（同樣是「稅後淨利」，財報用千元、簡報用億元，不能直接比大小）
+    if unit:
+        attrs["unit"] = unit
+    if yoy:
+        attrs["yoy"] = yoy
+    G.add_node(node_id, **attrs)
     save_graph()
     return node_id
 
 
 def ingest_metrics(company, period, key_metrics):
     """key_metrics 是 vlm_parse.py 解析出來的 list，例如：
-    [{"指標名稱": "手續費淨收益", "數值": "8054", ...}]
+    [{"指標名稱": "手續費淨收益", "數值": "8054", "單位": "千元", "YoY": "12%"}]
     """
     for m in key_metrics:
         name = m.get("指標名稱")
         value = m.get("數值")
         if name and value:
-            add_metric_datapoint(company, name, period, value)
+            add_metric_datapoint(
+                company, name, period, value,
+                unit=m.get("單位") or None,
+                yoy=m.get("YoY") or None,
+            )
 
 
 def _clean_number(v):
@@ -79,7 +89,7 @@ def list_periods(company):
 
 def list_metrics(company, period):
     return [
-        {"metric": d["metric"], "value": d["value"]}
+        {"metric": d["metric"], "value": d["value"], "unit": d.get("unit"), "yoy": d.get("yoy")}
         for _, d in G.nodes(data=True)
         if d["company"] == company and d["period"] == period
     ]

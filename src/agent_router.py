@@ -105,6 +105,16 @@ def detect_mentioned_companies(question, current_company):
     return [current_company] + mentioned
 
 
+def _fmt_metric(m):
+    """把指標排成給 LLM 看的文字。有單位就一定標出來——單位是跨公司比較能不能比的關鍵。"""
+    text = f"{m['metric']}：{m['value']}"
+    if m.get("unit"):
+        text += f" {m['unit']}"
+    if m.get("yoy"):
+        text += f"（年增 {m['yoy']}）"
+    return text
+
+
 def _pick_period_for_company(c, current_company, current_period):
     """目前選定的公司用使用者選的期間；其他被提到的公司則用它最新的期間"""
     if c == current_company:
@@ -138,10 +148,10 @@ def answer_question(question, company, this_period, last_period=None):
             comparable = [m for m in metrics_c if is_cross_comparable(m["metric"])]
             amounts = [m for m in metrics_c if not is_cross_comparable(m["metric"])]
             if comparable:
-                text = "；".join(f"{m['metric']}：{m['value']}" for m in comparable)
+                text = "；".join(_fmt_metric(m) for m in comparable)
                 comparable_lines.append(f"{c}（{p}）：{text}")
             if amounts:
-                text = "；".join(f"{m['metric']}：{m['value']}" for m in amounts)
+                text = "；".join(_fmt_metric(m) for m in amounts)
                 amount_lines.append(f"{c}（{p}）：{text}")
 
         if comparable_lines:

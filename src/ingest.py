@@ -15,7 +15,25 @@ from graph_rag import ingest_metrics
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def run_ingest(company, period, parsed_json_path=None):
+def parse_page_range(spec):
+    """把 "5-9" 或 "5,7,9" 或 "5-9,14" 解析成頁碼集合（1-based）。None 代表全部。
+    財報前面是四大報表、後面是附註，附註常混入其他期間／重分類的數字，
+    盲目全匯會污染知識圖譜，所以要能只挑指定頁。
+    """
+    if not spec:
+        return None
+    pages = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if "-" in part:
+            start, end = part.split("-", 1)
+            pages.update(range(int(start), int(end) + 1))
+        elif part:
+            pages.add(int(part))
+    return pages or None
+
+
+def run_ingest(company, period, parsed_json_path=None, pages=None):
     if parsed_json_path is None:
         parsed_json_path = os.path.join(BASE_DIR, "outputs", f"parsed_{company}_{period}.json")
 
@@ -24,9 +42,11 @@ def run_ingest(company, period, parsed_json_path=None):
         return False
 
     with open(parsed_json_path, "r", encoding="utf-8") as f:
-        pages = json.load(f)
+        all_pages = json.load(f)
 
-    for i, page in enumerate(pages):
+    for i, page in enumerate(all_pages):
+        if pages is not None and (i + 1) not in pages:
+            continue
         narrative = page.get("narrative_text")
         if narrative:
             index_narrative(
@@ -51,5 +71,8 @@ if __name__ == "__main__":
     parser.add_argument("--company", default="中信金控")
     parser.add_argument("--period", default="2026Q1")
     parser.add_argument("--json", default=None, help="自訂 JSON 路徑（通常不用填，會自動對應）")
+    parser.add_argument("--pages", default=None,
+                        help='只匯入指定頁，例如 "5-9" 或 "5,7" 或 "5-9,14"。不填=全部。'
+                             '財報建議只匯入四大報表那幾頁，避免附註的其他期間數字污染圖譜')
     args = parser.parse_args()
-    run_ingest(args.company, args.period, args.json)
+    run_ingest(args.company, args.period, args.json, pages=parse_page_range(args.pages))

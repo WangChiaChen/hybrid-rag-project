@@ -8,3 +8,5 @@ outputs/*.docx
 outputs/*.json
 uploads_temp/
 .DS_Store
+downloads/
+graph_import.csv
