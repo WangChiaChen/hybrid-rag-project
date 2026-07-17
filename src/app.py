@@ -23,12 +23,37 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 st.set_page_config(page_title="有你蒸好", layout="wide", page_icon="📈")
 
+# 版面風格參考台灣金融機構網站（證交所、金管會、金融研訓院）的共同特徵：
+# 中文字體堆疊、近直角、無陰影、內容置中不滿版。
 st.markdown("""
 <style>
+/* 中文字體。Streamlit 的 font="sans serif" 在 Windows 上會 fallback 到系統預設，
+   中文字形跟這些機構網站差很多——證交所用的是 Microsoft JhengHei / PingFang TC 這套。
+   標題要另外指定並加 !important：Streamlit 對 h1~h6 有自己的 font-family
+   （Source Sans），優先度比通用選擇器高，不然蓋不掉。 */
+html, body, .stApp, [class^="st-"], [class*=" st-"],
+button, input, textarea, select {
+    font-family: "Microsoft JhengHei", "微軟正黑體", "PingFang TC",
+                 "Heiti TC", Helvetica, Arial, sans-serif;
+}
+h1, h2, h3, h4, h5, h6,
+[data-testid="stHeading"] *, [data-testid="stMetricValue"] {
+    font-family: "Microsoft JhengHei", "微軟正黑體", "PingFang TC",
+                 "Heiti TC", Helvetica, Arial, sans-serif !important;
+}
+
+/* 內容寬度。layout="wide" 會撐滿整個螢幕，在寬螢幕上字會拉得很散；
+   機構網站多半限制在 1300px 上下置中。 */
+.block-container {
+    max-width: 1320px;
+    padding-top: 2.5rem;
+}
+
+/* 標籤：原本 12px 圓角偏圓潤，機構網站幾乎清一色直角。改成 3px 保留一點修飾但不可愛。 */
 .badge {
     display: inline-block;
     padding: 4px 12px;
-    border-radius: 12px;
+    border-radius: 3px;
     font-size: 13px;
     font-weight: 600;
     margin-right: 6px;
@@ -41,11 +66,23 @@ st.markdown("""
     background-color: #F1EFE8;
     color: #444441;
     padding: 2px 10px;
-    border-radius: 8px;
+    border-radius: 3px;
     font-size: 12px;
     margin-right: 6px;
     margin-top: 4px;
 }
+
+/* st.metric 的指標卡：加一條細框線做出區隔，直角、無陰影 */
+[data-testid="stMetric"] {
+    background-color: #FFFFFF;
+    border: 1px solid #E3E6EA;
+    border-radius: 3px;
+    padding: 12px 14px;
+}
+[data-testid="stMetricLabel"] { font-size: 13px; color: #5A6270; }
+
+/* 分頁標籤：直角、選中時用主色底線 */
+.stTabs [data-baseweb="tab"] { border-radius: 0; }
 </style>
 """, unsafe_allow_html=True)
 
