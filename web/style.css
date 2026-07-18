@@ -89,6 +89,38 @@ body {
   cursor: pointer;
 }
 .field select:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+
+/* 按鈕 */
+.btn-ghost {
+  font-family: var(--font); font-size: 14px; color: var(--text-2);
+  background: #fff; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 14px; cursor: pointer; align-self: flex-end; margin-bottom: 1px;
+}
+.btn-ghost:hover { border-color: var(--primary); color: var(--primary); }
+.btn-primary {
+  font-family: var(--font); font-size: 14px; font-weight: 700; color: #fff;
+  background: var(--primary); border: none; border-radius: var(--radius);
+  padding: 8px 16px; cursor: pointer;
+}
+.btn-primary:hover { background: var(--primary-2); }
+.btn-primary:disabled { background: #9AA6B4; cursor: default; }
+
+/* ---------- AI 觀點總結 ---------- */
+.ai-summary {
+  background: linear-gradient(180deg, #F3F7FC 0%, #ECF2F9 100%);
+  border: 1px solid #C9D6E4;
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin: 20px 0 4px;
+}
+.ai-summary-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.ai-badge {
+  font-size: 12px; font-weight: 700; color: #fff; background: var(--primary);
+  border-radius: var(--radius); padding: 3px 10px; letter-spacing: 1px;
+}
+.ai-summary-body { font-size: 15px; line-height: 1.75; color: var(--text); }
+.ai-summary-body.placeholder { color: var(--muted); }
+.ai-summary-body.thinking { color: var(--muted); }
 /* 「VS」把兩個期間選單綁在一起，讓關係一目了然 */
 .vs {
   font-size: 13px;
@@ -124,13 +156,15 @@ body {
   margin-bottom: 8px;
 }
 .hero .card {
-  background: linear-gradient(180deg, #FFFFFF 0%, #FAFCFE 100%);
-  border: 1px solid #C9D6E4;
+  /* 極淡的淺藍底，一眼看出這幾個是全頁最重要的指標 */
+  background: linear-gradient(180deg, #F5F8FC 0%, #EDF3FA 100%);
+  border: 1px solid #C2D2E4;
   border-top: 3px solid var(--primary);
   padding: 18px 20px;
 }
 .hero .card .name { font-size: 13px; min-height: auto; margin-bottom: 10px; color: var(--text-2); }
-.hero .card .val { font-size: 34px; }
+/* 投影機偏暗，門面數字加大加粗，後排也看得清 */
+.hero .card .val { font-size: 38px; font-weight: 800; }
 
 /* ---------- 一般指標卡 ---------- */
 .cards {
@@ -147,6 +181,10 @@ body {
   transition: border-color .12s, transform .12s;
 }
 .card:hover { border-color: var(--primary); transform: translateY(-1px); }
+/* 累計型指標整張卡走淺灰，跟一般（可跨季比較的）指標一眼區隔——
+   顏色本身就傳達「這張不能直接跨季比」，不用讀字。 */
+.card.is-cum { background: #F7F8F9; border-color: #E4E4E4; }
+.card.is-cum .val { color: #5A6068; }
 
 .card .name {
   font-size: 12px;
@@ -165,8 +203,15 @@ body {
 .card .meta { margin-top: 10px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .card .meta:empty { display: none; }
 
-.chip { font-size: 11px; padding: 2px 7px; border-radius: var(--radius); border: 1px solid transparent; }
-.chip-cum { background: #FDF3E3; color: #8A5200; border-color: #EBD9BB; }
+/* 「累計」是說明，不是可點的東西——改成細灰註解，不搶數值的注意力 */
+.cum-note {
+  font-size: 11px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.cum-note::before { content: "ⓘ"; font-size: 11px; }
 
 .delta { font-size: 13px; font-weight: 700; }
 .delta.up { color: var(--up); }
@@ -190,6 +235,37 @@ body {
   transition: opacity .15s;
 }
 .card:hover .spark-label { opacity: 1; }
+
+/* ---------- 術語 tooltip ---------- */
+.term {
+  border-bottom: 1px dotted var(--muted);
+  cursor: help;
+  position: relative;
+}
+.term::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0; bottom: 145%;
+  width: 240px;
+  background: #2A2E35; color: #fff;
+  font-size: 12px; font-weight: 400; line-height: 1.55;
+  padding: 9px 11px; border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.22);
+  opacity: 0; visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity .15s, transform .15s;
+  z-index: 50;
+  pointer-events: none;
+  white-space: normal;
+}
+.term:hover::after { opacity: 1; visibility: visible; transform: translateY(0); }
+
+/* ---------- 過場動畫 ---------- */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.hero .card, .group { animation: fade-up .28s ease both; }
 
 /* ---------- 分組 ---------- */
 .group { margin-bottom: 26px; }

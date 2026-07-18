@@ -168,6 +168,53 @@ def trend(company: str = Query(...), metric: str = Query(...)):
     }
 
 
+@app.get("/api/summary")
+def summary(
+    company: str = Query(...),
+    period: str = Query(...),
+    last_period: Optional[str] = Query(None),
+):
+    """AI 觀點總結：用一句話講出這期的重點。呼應 Hybrid RAG + Agent 的定位——
+    不是只堆數字，而是讓 AI 讀完數字給結論。
+    只根據下方提供的真實數字，累計指標明確標記避免它拿去比錯。
+    """
+    from agent_router import client as gemini, call_with_retry
+
+    ms = list_metrics(company, period)
+    if not ms:
+        raise HTTPException(404, f"{company} {period} 沒有資料")
+
+    # 送給 LLM 前先篩過：比率／每股 + 有算出變化率的，最多 24 個，避免 prompt 太長也省額度
+    picked = []
+    for m in ms:
+        kind = classify_metric(m["metric"], m.get("unit"))
+        change = calc_change(company, m["metric"], period, last_period) if last_period else None
+        if kind in ("ratio", "per_share") or change is not None:
+            picked.append((m, kind, change))
+    picked = picked[:24] or [(m, classify_metric(m["metric"], m.get("unit")), None) for m in ms[:24]]
+
+    lines = []
+    for m, kind, change in picked:
+        s = f"{m['metric']}：{m['value']}{m.get('unit') or ''}"
+        if change is not None:
+            s += f"（較{last_period} {'+' if change > 0 else ''}{change}%）"
+        if is_cumulative(company, m["metric"]):
+            s += "［年初至今累計，勿跨季比較］"
+        lines.append(s)
+
+    prompt = (
+        f"你是財務分析助理。以下是{company} {period}的真實財務數據，"
+        f"請用繁體中文寫「一到兩句」的重點總結，直接給結論、點出亮點與需留意處，"
+        f"只能引用下方數字、不要虛構、不要條列、不要開場白：\n\n" + "\n".join(lines)
+    )
+    try:
+        resp = call_with_retry(lambda: gemini.models.generate_content(
+            model="gemini-flash-lite-latest", contents=prompt))
+        return {"summary": resp.text.strip(), "company": company, "period": period}
+    except Exception as e:
+        raise HTTPException(502, f"AI 總結失敗：{e}")
+
+
 class ChatRequest(BaseModel):
     question: str
     company: str

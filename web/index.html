@@ -47,9 +47,19 @@
           <select id="lastPeriod"></select>
         </div>
       </div>
+      <button id="reset" class="btn-ghost" title="回到預設：最新一季 vs 前一季">↺ 重置</button>
     </div>
 
     <div id="dash-error" class="error hidden"></div>
+
+    <!-- AI 觀點總結：呼應 Hybrid RAG + Agent，讓 AI 讀完數字給一句結論 -->
+    <div class="ai-summary">
+      <div class="ai-summary-head">
+        <span class="ai-badge">AI 觀點</span>
+        <button id="gen-summary" class="btn-primary">生成本期總結</button>
+      </div>
+      <p id="summary-text" class="ai-summary-body">按上方按鈕，讓 AI Agent 讀完本期指標後給出一句話結論。</p>
+    </div>
 
     <div class="section-head" id="hero-head">
       <h2>核心指標</h2>

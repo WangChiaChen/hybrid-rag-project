@@ -64,12 +64,44 @@ const groupOf = (name) => (GROUPS.find((g) => g.test(name)) || GROUPS[GROUPS.len
 // 金控層級的門面數字。這幾個要比其他項目搶眼。
 const HERO = /^(合併稅後淨利|本期淨利|稅後淨利|基本每股盈餘|每股稅後盈餘|EPS|ROE|稅後股東權益報酬率|資產總計)/;
 
+// 財務術語小辭典：滑到指標名稱上顯示定義，給非財務背景的評審看得懂。
+// key 會用「包含」比對指標名稱，長的排前面（NIM 要先於「利」之類的短詞）。
+const GLOSSARY = [
+  ["淨利息收益率", "NIM（淨利息收益率）：利息淨收益 ÷ 生息資產，衡量銀行放款賺利差的效率。"],
+  ["NIM", "NIM（淨利息收益率）：利息淨收益 ÷ 生息資產，衡量銀行放款賺利差的效率。"],
+  ["股東權益報酬率", "ROE：稅後淨利 ÷ 股東權益，股東每投入一元賺回多少。"],
+  ["ROE", "ROE：稅後淨利 ÷ 股東權益，股東每投入一元賺回多少。"],
+  ["資產報酬率", "ROA：稅後淨利 ÷ 總資產，衡量整體資產的獲利效率。"],
+  ["ROA", "ROA：稅後淨利 ÷ 總資產，衡量整體資產的獲利效率。"],
+  ["每股盈餘", "EPS：稅後淨利 ÷ 流通股數，每一股賺多少。"],
+  ["每股稅後盈餘", "EPS：稅後淨利 ÷ 流通股數，每一股賺多少。"],
+  ["資本適足率", "資本適足率：自有資本 ÷ 風險性資產，衡量銀行吸收損失的能力，法定門檻 10.5%。"],
+  ["逾期放款比率", "逾放比：逾期放款 ÷ 總放款，越低代表資產品質越好。"],
+  ["覆蓋率", "備抵呆帳覆蓋率：已提列的呆帳準備 ÷ 逾期放款，越高對壞帳越有保護。"],
+  ["清償能力", "保險業清償能力（ICS/RBC）：衡量壽險公司償付保單的能力。"],
+  ["RBC", "RBC：保險業資本適足率，衡量壽險／產險公司的財務健全度。"],
+  ["CSM", "CSM（合約服務邊際）：IFRS 17 下，保單尚未實現的未來獲利。"],
+  ["存放比", "存放比率：放款 ÷ 存款，衡量資金運用效率。"],
+  ["利差", "利差：放款利率 − 資金成本，銀行賺的價差。"],
+];
+function annotateTerms(name) {
+  for (const [term, tip] of GLOSSARY) {
+    const i = name.indexOf(term);
+    if (i >= 0) {
+      const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+      return esc(name.slice(0, i)) +
+        `<span class="term" data-tip="${esc(tip)}">${esc(term)}</span>` +
+        esc(name.slice(i + term.length));
+    }
+  }
+  return name.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+}
+
 // ---------- 卡片 ----------
 function deltaHtml(m) {
   if (m.change === null || m.change === undefined) {
-    // 累計指標跨季比較會被後端擋掉——那不是缺資料，是刻意不給假數字。
-    // 沒有累計問題又沒變化率的（例如沒選比較期間），就什麼都不顯示，不要放空標籤。
-    return m.cumulative ? `<span class="delta na">累計值，跨季不可比</span>` : "";
+    // 累計指標跨季比較會被後端擋掉——刻意不給假數字。改用細灰註解（不是標籤），不搶數值。
+    return m.cumulative ? `<span class="cum-note">累計值，跨季不可比</span>` : "";
   }
   const cls = m.change > 0 ? "up" : m.change < 0 ? "down" : "na";
   return `<span class="delta ${cls}">${m.change > 0 ? "+" : ""}${m.change}%</span>`;
@@ -78,15 +110,10 @@ function deltaHtml(m) {
 function cardHtml(m, hero) {
   const n = num(m.value);
   const neg = !isNaN(n) && n < 0;
-  const meta = [
-    m.cumulative ? '<span class="chip chip-cum">累計</span>' : "",
-    deltaHtml(m),
-  ].filter(Boolean).join("");
-
   return `
-    <div class="name">${m.metric}</div>
+    <div class="name">${annotateTerms(m.metric)}</div>
     <div class="val ${neg ? "neg" : ""}">${m.value}${m.unit ? `<span class="unit">${m.unit}</span>` : ""}</div>
-    <div class="meta">${meta}</div>
+    <div class="meta">${deltaHtml(m)}</div>
     ${hero ? "" : '<div class="spark"></div><div class="spark-label"></div>'}`;
 }
 
@@ -153,7 +180,7 @@ function render(data) {
   hbox.innerHTML = "";
   heroes.slice(0, 4).forEach((m) => {
     const el = document.createElement("div");
-    el.className = "card";
+    el.className = "card" + (m.cumulative ? " is-cum" : "");
     el.innerHTML = cardHtml(m, true);
     hbox.appendChild(el);
   });
@@ -178,7 +205,7 @@ function render(data) {
     const grid = sec.querySelector(".cards");
     items.forEach((m) => {
       const el = document.createElement("div");
-      el.className = "card";
+      el.className = "card" + (m.cumulative ? " is-cum" : "");
       el.innerHTML = cardHtml(m, false);
       grid.appendChild(el);
       attachSpark(el, data.company, m.metric);
@@ -257,6 +284,37 @@ async function load() {
   }
 }
 
+// ---------- 重置 ----------
+function resetDashboard() {
+  $("company").selectedIndex = 0;
+  onCompanyChange(); // 會把期間設回「最新一季 vs 前一季」
+  $("summary-text").textContent = "按上方按鈕，讓 AI Agent 讀完本期指標後給出一句話結論。";
+  $("summary-text").className = "ai-summary-body placeholder";
+}
+
+// ---------- AI 觀點總結 ----------
+async function genSummary() {
+  const company = $("company").value, period = $("period").value;
+  const lastRaw = $("lastPeriod").value;
+  const last = lastRaw && lastRaw !== "（不比較）" ? lastRaw : null;
+  const btn = $("gen-summary"), out = $("summary-text");
+  btn.disabled = true;
+  out.className = "ai-summary-body thinking";
+  out.textContent = "AI 讀取本期指標中…";
+  try {
+    const qs = new URLSearchParams({ company, period });
+    if (last) qs.set("last_period", last);
+    const d = await api(`/api/summary?${qs}`);
+    out.className = "ai-summary-body";
+    out.textContent = d.summary;
+  } catch (e) {
+    out.className = "ai-summary-body";
+    out.textContent = `總結生成失敗：${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ---------- 啟動 ----------
 (async () => {
   try {
@@ -266,6 +324,8 @@ async function load() {
     $("company").onchange = onCompanyChange;
     $("period").onchange = load;
     $("lastPeriod").onchange = load;
+    $("reset").onclick = resetDashboard;
+    $("gen-summary").onclick = genSummary;
     onCompanyChange();
   } catch (e) {
     showError(`無法連線到 API：${e.message}　（後端有啟動嗎？）`);
