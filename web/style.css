@@ -291,6 +291,42 @@ body {
 }
 #chart { width: 100%; }
 
+/* ---------- 比較表 ---------- */
+.cmp-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 14px;
+}
+.cmp-table th, .cmp-table td { padding: 11px 14px; text-align: right; }
+.cmp-table th:first-child, .cmp-table td:first-child { text-align: left; }
+.cmp-table thead th {
+  background: var(--primary);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+}
+.cmp-table tbody tr { border-top: 1px solid var(--border); }
+.cmp-table tbody tr:nth-child(even) { background: #FAFBFC; }
+.cmp-table td .num { font-variant-numeric: tabular-nums; }
+/* 兩家數值較高的那格加粗——中性標示，不判好壞（逾放比越低越好，不能一律紅色） */
+.cmp-table td.higher .num { font-weight: 700; }
+.cmp-table .unit-col { color: var(--muted); font-size: 12px; }
+
+.cmp-warn {
+  font-size: 13px;
+  color: #8A5200;
+  background: #FDF3E3;
+  border: 1px solid #EBD9BB;
+  border-radius: var(--radius);
+  padding: 10px 13px;
+  margin: 12px 0;
+  line-height: 1.6;
+}
+
 /* ---------- 狀態 ---------- */
 .note {
   font-size: 13px;

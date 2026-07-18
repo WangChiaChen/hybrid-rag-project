@@ -284,6 +284,114 @@ async function load() {
   }
 }
 
+// ================= 跨機構比較 =================
+function initCompare() {
+  const names = COMPANIES.map((c) => c.name);
+  fillSelect($("cmpA"), names, names[0]);
+  fillSelect($("cmpB"), names, names[1] || names[0]);
+  syncComparePeriods("A");
+  syncComparePeriods("B");
+  ["cmpA", "cmpB"].forEach((id) => ($(id).onchange = () => { syncComparePeriods(id.endsWith("A") ? "A" : "B"); loadCompare(); }));
+  ["cmpPA", "cmpPB"].forEach((id) => ($(id).onchange = loadCompare));
+  loadCompare();
+}
+
+function syncComparePeriods(side) {
+  const ps = periodsOf($("cmp" + side).value);
+  fillSelect($("cmpP" + side), ps, ps[ps.length - 1]);
+}
+
+async function loadCompare() {
+  const a = $("cmpA").value, pa = $("cmpPA").value;
+  const b = $("cmpB").value, pb = $("cmpPB").value;
+  if (!a || !pa || !b || !pb) return;
+
+  $("cmp-error").classList.add("hidden");
+  $("cmp-body").innerHTML = '<p class="loading">載入中…</p>';
+
+  try {
+    const qs = new URLSearchParams({ company_a: a, period_a: pa, company_b: b, period_b: pb });
+    const d = await api(`/api/compare?${qs}`);
+    renderCompare(d);
+  } catch (e) {
+    $("cmp-body").innerHTML = "";
+    $("cmp-error").textContent = `載入失敗：${e.message}`;
+    $("cmp-error").classList.remove("hidden");
+  }
+}
+
+function cmpTable(rows, a, b, showUnit) {
+  const cell = (r, key, higher) =>
+    `<td class="${higher ? "higher" : ""}"><span class="num">${r[key].toLocaleString()}</span></td>`;
+  const body = rows.map((r) => {
+    const aHi = r.value_a > r.value_b, bHi = r.value_b > r.value_a;
+    return `<tr>
+      <td>${annotateTerms(r.metric)}</td>
+      ${cell(r, "value_a", aHi)}
+      ${cell(r, "value_b", bHi)}
+      ${showUnit ? `<td class="unit-col">${r.unit || "—"}</td>` : ""}
+    </tr>`;
+  }).join("");
+  return `<table class="cmp-table">
+    <thead><tr><th>指標</th><th>${a}</th><th>${b}</th>${showUnit ? "<th>單位</th>" : ""}</tr></thead>
+    <tbody>${body}</tbody></table>`;
+}
+
+function renderCompare(d) {
+  const box = $("cmp-body");
+  const a = d.company_a, b = d.company_b;
+  if (!d.rows.length) {
+    box.innerHTML = `<p class="loading">${a}（${d.period_a}）與 ${b}（${d.period_b}）沒有名稱完全相同的指標。<br>
+      換個期間試試，或用「問答與報告」讓 LLM 做語意層面的比較。</p>`;
+    return;
+  }
+
+  const comparable = d.rows.filter((r) => r.comparable);
+  const amounts = d.rows.filter((r) => !r.comparable);
+  let html = `<div class="section-head"><h2>共同指標</h2>
+    <span class="count">${d.rows.length} 個　·　${a} ${d.period_a} vs ${b} ${d.period_b}</span></div>`;
+
+  // 可直接比較（比率／每股）→ 長條圖 + 表
+  if (comparable.length) {
+    html += `<div class="group"><div class="group-head"><span class="dot"></span>
+      <h3>可直接比較的指標</h3><span class="n">比率／每股，單位一致</span></div>
+      <div class="panel"><div id="cmp-chart"></div></div>
+      <div style="margin-top:14px">${cmpTable(comparable, a, b, false)}</div></div>`;
+  }
+  // 絕對金額 → 只列表 + 單位警語
+  if (amounts.length) {
+    html += `<div class="group"><div class="group-head"><span class="dot"></span>
+      <h3>絕對金額指標</h3><span class="n">僅列表對照</span></div>
+      <div class="cmp-warn">以下為絕對金額，兩家的申報單位可能不同（例如一家用百萬元、另一家用億元），
+      請勿直接比較數字大小，需先確認並換算成相同單位。</div>
+      ${cmpTable(amounts, a, b, true)}</div>`;
+  }
+  box.innerHTML = html;
+
+  if (comparable.length) drawCompareChart(comparable, a, b);
+}
+
+function drawCompareChart(rows, a, b) {
+  const r = rows.slice(0, 16).reverse();
+  const y = r.map((m) => (m.metric.length > 20 ? m.metric.slice(0, 20) + "…" : m.metric));
+  Plotly.newPlot("cmp-chart", [
+    { type: "bar", orientation: "h", name: a, y, x: r.map((m) => m.value_a),
+      marker: { color: "#1E3A5F" }, hovertemplate: `${a}<br>%{y}：%{x}<extra></extra>` },
+    { type: "bar", orientation: "h", name: b, y, x: r.map((m) => m.value_b),
+      marker: { color: "#6B4E9E" }, hovertemplate: `${b}<br>%{y}：%{x}<extra></extra>` },
+  ], {
+    barmode: "group",
+    margin: { l: 190, r: 30, t: 8, b: 36 },
+    height: Math.max(360, r.length * 46),
+    paper_bgcolor: "#FFF", plot_bgcolor: "#FFF",
+    font: { family: '"PingFang TC","Microsoft JhengHei",sans-serif', size: 12, color: "#434343" },
+    xaxis: { gridcolor: "#EDEDED", zerolinecolor: "#DFDFDF" },
+    yaxis: { automargin: true },
+    legend: { orientation: "h", y: 1.06, x: 0 },
+    bargap: 0.3, bargroupgap: 0.15,
+  }, { displayModeBar: false, responsive: true });
+}
+
 // ---------- 重置 ----------
 function resetDashboard() {
   $("company").selectedIndex = 0;
@@ -327,6 +435,7 @@ async function genSummary() {
     $("reset").onclick = resetDashboard;
     $("gen-summary").onclick = genSummary;
     onCompanyChange();
+    initCompare();
   } catch (e) {
     showError(`無法連線到 API：${e.message}　（後端有啟動嗎？）`);
   }

@@ -82,9 +82,41 @@
     <p class="note" id="cum-note"></p>
   </section>
 
-  <!-- ===== 其他分頁（階段 3 再做） ===== -->
+  <!-- ===== 跨機構比較 ===== -->
   <section id="compare" class="hidden">
-    <p class="note">跨機構比較 —— 施工中。目前請用 Streamlit 版本。</p>
+    <div class="controls">
+      <div class="compare-group">
+        <div class="field">
+          <label for="cmpA">機構 A</label>
+          <select id="cmpA"></select>
+        </div>
+        <div class="field">
+          <label for="cmpPA">期間 A</label>
+          <select id="cmpPA"></select>
+        </div>
+      </div>
+      <span class="vs">VS</span>
+      <div class="compare-group">
+        <div class="field">
+          <label for="cmpB">機構 B</label>
+          <select id="cmpB"></select>
+        </div>
+        <div class="field">
+          <label for="cmpPB">期間 B</label>
+          <select id="cmpPB"></select>
+        </div>
+      </div>
+    </div>
+
+    <div id="cmp-error" class="error hidden"></div>
+
+    <p class="note">
+      只比對<strong>名稱完全相同</strong>的指標。「手續費淨收益」與「淨手續費收入」這種同義詞目前配不起來——
+      Chroma 預設的 embedding 是英文模型，對中文財務術語沒有鑑別度，寧可少也不要配錯。
+      需要語意層面的跨機構比較，請用「問答與報告」讓 LLM 處理。
+    </p>
+
+    <div id="cmp-body"></div>
   </section>
   <section id="chat" class="hidden">
     <p class="note">問答與報告 —— 施工中。目前請用 Streamlit 版本。</p>
