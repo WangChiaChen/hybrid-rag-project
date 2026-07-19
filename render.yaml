@@ -1,0 +1,19 @@
+# Render 一鍵部署設定（免費方案）。
+# 用法：到 render.com → New → Blueprint → 連這個 GitHub repo，
+# Render 會讀這個檔自動建好服務。API 金鑰在 Render 後台手動填（不進版控）。
+services:
+  - type: web
+    name: hybrid-rag-web
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --app-dir src --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false        # sync:false = 部署時在後台手動輸入，不寫進 repo
+      - key: EAP_API_BASE_URL
+        sync: false
+      - key: EAP_PROJECT_ID
+        sync: false
+      - key: EAP_API_KEY
+        sync: false
