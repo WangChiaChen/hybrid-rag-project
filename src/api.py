@@ -212,7 +212,7 @@ def summary(
     不是只堆數字，而是讓 AI 讀完數字給結論。
     只根據下方提供的真實數字，累計指標明確標記避免它拿去比錯。
     """
-    from agent_router import client as gemini, call_with_retry
+    from agent_router import get_client, call_with_retry
 
     ms = list_metrics(company, period)
     if not ms:
@@ -242,7 +242,7 @@ def summary(
         f"只能引用下方數字、不要虛構、不要條列、不要開場白：\n\n" + "\n".join(lines)
     )
     try:
-        resp = call_with_retry(lambda: gemini.models.generate_content(
+        resp = call_with_retry(lambda: get_client().models.generate_content(
             model="gemini-flash-lite-latest", contents=prompt))
         return {"summary": resp.text.strip(), "company": company, "period": period}
     except Exception as e:

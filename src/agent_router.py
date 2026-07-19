@@ -13,7 +13,23 @@ from metric_alignment import is_cross_comparable
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+# Gemini client 改成「用到才建立」。原本在 import 時就建立，一旦部署環境沒設
+# GEMINI_API_KEY 會直接拋 ValueError、讓整個服務起不來（Render 上就是 status 1）。
+# 延後建立後：沒設 key 也能正常啟動，只有真的要用到 AI 時才報清楚的錯。
+_client = None
+
+
+def get_client():
+    global _client
+    if _client is None:
+        key = os.getenv("GEMINI_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "尚未設定 GEMINI_API_KEY，AI 問答／總結無法使用。"
+                "請在部署平台的環境變數（或本機 .env）填入你的 Gemini 金鑰。")
+        _client = genai.Client(api_key=key)
+    return _client
 
 
 def call_with_retry(fn, max_retries=4, base_wait=5):
@@ -64,7 +80,7 @@ def route_and_pick_metric(question, available_metrics):
         available_metrics=available_metrics,
         question=question
     )
-    response = call_with_retry(lambda: client.models.generate_content(
+    response = call_with_retry(lambda: get_client().models.generate_content(
         model="gemini-flash-lite-latest",
         contents=prompt,
     ))
@@ -265,7 +281,7 @@ def answer_question(question, company, this_period, last_period=None):
 
 問題：{question}"""
 
-    response = call_with_retry(lambda: client.models.generate_content(
+    response = call_with_retry(lambda: get_client().models.generate_content(
         model="gemini-flash-lite-latest",
         contents=final_prompt,
     ))
