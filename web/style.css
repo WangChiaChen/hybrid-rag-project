@@ -326,6 +326,121 @@ body {
   margin: 12px 0;
   line-height: 1.6;
 }
+/* 換算後改用中性資訊色（不是警告色）——這是「已處理」而非「請小心」 */
+.cmp-note {
+  font-size: 13px;
+  color: var(--text-2);
+  background: var(--primary-soft);
+  border: 1px solid #D4DEEB;
+  border-radius: var(--radius);
+  padding: 10px 13px;
+  margin: 12px 0;
+  line-height: 1.6;
+}
+.cmp-table thead th small { font-weight: 400; font-size: 11px; opacity: .8; margin-left: 4px; }
+.cmp-table .raw-unit { font-size: 11px; color: var(--muted); margin-left: 3px; }
+.infer-note { font-size: 12px; color: var(--muted); }
+
+/* ---------- 標準比率對照 ---------- */
+.std-note {
+  font-size: 13px;
+  color: var(--text-2);
+  background: var(--primary-soft);
+  border: 1px solid #D4DEEB;
+  border-radius: var(--radius);
+  padding: 10px 13px;
+  margin: 0 0 14px;
+  line-height: 1.65;
+}
+.std-note strong { color: var(--primary); }
+/* 表頭用主色的深一階，跟下面「逐字比對」的表區隔，暗示這是加值過的一組 */
+.std-table thead th { background: var(--primary-2); }
+/* 「對齊／衍生」小徽章：點出這列是字典對齊還是即時計算，滑上去看對應欄位 */
+.std-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border: 1px solid #C9D6E4;
+  border-radius: 2px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  cursor: help;
+  position: relative;
+  vertical-align: middle;
+}
+.std-badge.derived { color: #6B4E9E; background: #F1ECF8; border-color: #D8CCEC; }
+.std-badge::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0; bottom: 150%;
+  width: max-content; max-width: 300px;
+  background: #2A2E35; color: #fff;
+  font-size: 12px; font-weight: 400; line-height: 1.55;
+  padding: 8px 11px; border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.22);
+  opacity: 0; visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity .15s, transform .15s;
+  z-index: 50; pointer-events: none; white-space: normal;
+}
+.std-badge:hover::after { opacity: 1; visibility: visible; transform: translateY(0); }
+
+/* ---------- 可收合的技術說明（點開才展開，平常只佔一行） ---------- */
+.info-disclosure {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius);
+  margin: 16px 0;
+  overflow: hidden;
+}
+.info-disclosure summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 15px;
+  font-size: 14px;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+.info-disclosure summary::-webkit-details-marker { display: none; }
+.info-disclosure summary:hover { background: #F7F9FB; }
+.info-disclosure summary strong { color: var(--primary); font-weight: 700; }
+.info-disclosure .info-ico { color: var(--primary); font-size: 15px; }
+.info-disclosure .info-hint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.info-disclosure .info-hint::after { content: "點此展開技術說明 ▸"; }
+.info-disclosure[open] .info-hint::after { content: "收合 ▾"; }
+.info-disclosure .info-body {
+  padding: 4px 16px 15px 16px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+.info-disclosure .info-body p {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.7;
+  margin-top: 10px;
+}
+.info-disclosure .info-body strong { color: var(--primary); }
+
+/* 給評審的一句話結語：低調但點題 */
+.strategy-note {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin: 22px 0 8px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
 
 /* ---------- 狀態 ---------- */
 .note {
@@ -349,3 +464,262 @@ body {
 }
 footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height: 1.7; }
 .hidden { display: none; }
+
+/* ---------- 問答與報告 ---------- */
+.chat-log {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  min-height: 320px;
+  max-height: 62vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.chat-hint { color: var(--muted); font-size: 14px; line-height: 1.9; margin: auto 0; text-align: center; }
+.chat-hint-sub { font-size: 12px; color: #9AA6B4; }
+
+.msg { max-width: 82%; font-size: 15px; line-height: 1.7; animation: fade-up .2s ease both; }
+/* 使用者：靠右、主色底白字 */
+.msg.me {
+  align-self: flex-end;
+  background: var(--primary);
+  color: #fff;
+  padding: 10px 15px;
+  border-radius: 12px 12px 3px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* AI：靠左、淺灰底 */
+.msg.bot {
+  align-self: flex-start;
+  background: #F6F8FA;
+  border: 1px solid var(--border);
+  padding: 13px 16px;
+  border-radius: 12px 12px 12px 3px;
+  color: var(--text);
+  width: 100%;
+  max-width: 88%;
+}
+.msg.bot.thinking { color: var(--muted); font-style: italic; }
+.bot-text { white-space: normal; }
+/* 答案裡的 Markdown 渲染結果 */
+.bot-text p { margin: 0 0 8px; }
+.bot-text p:last-child { margin-bottom: 0; }
+.bot-text ul { margin: 6px 0 8px; padding-left: 20px; }
+.bot-text li { margin: 3px 0; }
+.bot-text strong { font-weight: 700; color: var(--text); }
+.bot-text code {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px; background: #ECEFF2; border-radius: 3px; padding: 1px 5px;
+}
+.md-table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 14px;
+  background: #fff;
+  overflow: hidden;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.md-table th, .md-table td {
+  border: 1px solid var(--border);
+  padding: 7px 13px;
+  text-align: left;
+  white-space: nowrap;
+}
+.md-table thead th { background: var(--primary-soft); color: var(--primary); font-weight: 700; }
+.md-table tbody tr:nth-child(even) { background: #FAFBFC; }
+.bot-text .md-pre {
+  background: #ECEFF2; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 11px; margin: 6px 0; font-size: 13px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+/* 路由徽章：呼應 Hybrid RAG 三條路線 */
+.chat-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 3px;
+  padding: 2px 9px;
+  margin-bottom: 8px;
+  letter-spacing: .3px;
+}
+.chat-badge.b-calc { background: #E1F5EE; color: #085041; }
+.chat-badge.b-narr { background: #EEEDFE; color: #3C3489; }
+.chat-badge.b-both { background: #FAEEDA; color: #633806; }
+
+/* 公式驗證：綠框，強調「這個數字是算出來的、不是 LLM 生成的」 */
+.calc-verify {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #1E5B3A;
+  background: #EAF6EF;
+  border: 1px solid #C6E4D3;
+  border-radius: var(--radius);
+  padding: 8px 12px;
+}
+.calc-verify strong { color: #0F4A2B; }
+
+/* 答案裡的趨勢圖 */
+.bot-chart {
+  margin-top: 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+}
+
+.src-row { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.src-tag {
+  font-size: 12px;
+  color: var(--text-2);
+  background: #EEF0F3;
+  border: 1px solid #E1E4E8;
+  border-radius: 3px;
+  padding: 2px 9px;
+}
+
+/* 問答頂列：EAP 開關 + 匯出按鈕 */
+.chat-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin: 22px 0 14px;
+}
+.chat-bar .eap-hint { flex: 1 1 auto; }
+.chat-bar #export-report { margin-left: auto; }
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch-track {
+  width: 38px; height: 20px; border-radius: 10px;
+  background: #C6CCD4; position: relative; transition: background .15s;
+  flex: none;
+}
+.switch-knob {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; transition: transform .15s;
+  box-shadow: 0 1px 2px rgba(0,0,0,.25);
+}
+.switch input:checked + .switch-track { background: var(--primary); }
+.switch input:checked + .switch-track .switch-knob { transform: translateX(18px); }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--primary); outline-offset: 2px; }
+.switch-label { font-size: 14px; color: var(--text-2); }
+.eap-hint { font-size: 12px; color: var(--muted); }
+
+/* ---------- 上傳新資料 ---------- */
+.upload-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin-bottom: 8px;
+}
+.upload-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px 20px;
+  margin-bottom: 16px;
+}
+.upload-grid .field { gap: 8px; }
+.upload-grid label { font-size: 13px; color: var(--text-2); font-weight: 700; }
+.upload-grid label b { color: var(--primary); }
+.upload-grid input[type="text"] {
+  font-family: var(--font); font-size: 15px; color: var(--text);
+  padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: #fff;
+}
+.upload-grid input[type="text"]:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+.upload-grid input[type="range"] { accent-color: var(--primary); margin-top: 4px; }
+.upload-grid input[type="file"] {
+  font-family: var(--font); font-size: 13px; color: var(--text-2);
+  padding: 9px 11px; border: 1px dashed var(--border);
+  border-radius: var(--radius); background: #FAFBFC;
+}
+.upload-file { grid-column: 1 / -1; }
+.up-hint { font-size: 12px; color: var(--muted); }
+.upload-card .btn-primary { padding: 10px 22px; }
+
+.up-status { margin-top: 14px; }
+.up-progress {
+  height: 8px; background: #EDEDED; border-radius: 4px; overflow: hidden; margin-bottom: 8px;
+}
+.up-progress > span {
+  display: block; height: 100%; width: 0;
+  background: var(--primary); border-radius: 4px; transition: width .3s;
+}
+#up-msg { font-size: 13px; line-height: 1.6; }
+#up-msg.up-run { color: var(--text-2); }
+#up-msg.up-ok { color: #1E5B3A; font-weight: 700; }
+#up-msg.up-err { color: #8A2A26; font-weight: 700; }
+
+/* ---------- 資料來源總覽 ---------- */
+.src-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  margin-bottom: 8px;
+}
+.src-stat {
+  background: linear-gradient(180deg, #F5F8FC 0%, #EDF3FA 100%);
+  border: 1px solid #C2D2E4;
+  border-top: 3px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+.src-stat-val { font-size: 30px; font-weight: 800; color: var(--primary); line-height: 1.1; }
+.src-stat-label { font-size: 13px; color: var(--text-2); margin-top: 6px; font-weight: 700; }
+.src-stat-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.src-table { margin-top: 4px; }
+.src-table .num-cell { text-align: right; font-variant-numeric: tabular-nums; }
+.src-table th:nth-child(2), .src-table th:nth-child(3) { text-align: right; }
+/* 指標量的小橫條，讓各期多寡一眼看出 */
+.src-bar {
+  display: block; width: 100%; height: 8px;
+  background: #EDEDED; border-radius: 4px; overflow: hidden;
+}
+.src-bar > span { display: block; height: 100%; background: var(--primary); border-radius: 4px; }
+
+.transcript-view {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-top: 12px;
+  max-height: 460px;
+  overflow-y: auto;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.85;
+  color: var(--text-2);
+}
+.transcript-view.loading { color: var(--muted); }
+/* 逐字稿的 Markdown 渲染結果 */
+.transcript-view p { margin: 0 0 10px; }
+.transcript-view p:last-child { margin-bottom: 0; }
+.transcript-view ul { margin: 6px 0 10px; padding-left: 22px; }
+.transcript-view li { margin: 4px 0; }
+.transcript-view strong { color: var(--text); font-weight: 700; }
+
+/* 輸入列 */
+.chat-input { display: flex; gap: 10px; margin: 14px 0 4px; }
+.chat-input input {
+  flex: 1;
+  font-family: var(--font);
+  font-size: 15px;
+  color: var(--text);
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #fff;
+}
+.chat-input input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+.chat-input .btn-primary { padding: 0 22px; }

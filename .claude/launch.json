@@ -1,0 +1,34 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "fastapi-web",
+      "runtimeExecutable": "venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-m",
+        "uvicorn",
+        "api:app",
+        "--app-dir",
+        "src",
+        "--port",
+        "8000"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "streamlit-app",
+      "runtimeExecutable": "venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-m",
+        "streamlit",
+        "run",
+        "src/app.py",
+        "--server.headless",
+        "true",
+        "--server.port",
+        "8501"
+      ],
+      "port": 8501
+    }
+  ]
+}

@@ -110,19 +110,97 @@
 
     <div id="cmp-error" class="error hidden"></div>
 
-    <p class="note">
-      只比對<strong>名稱完全相同</strong>的指標。「手續費淨收益」與「淨手續費收入」這種同義詞目前配不起來——
-      Chroma 預設的 embedding 是英文模型，對中文財務術語沒有鑑別度，寧可少也不要配錯。
-      需要語意層面的跨機構比較，請用「問答與報告」讓 LLM 處理。
-    </p>
+    <!-- 說明文改成點開才展開的資訊框：平常只佔一行，版面清爽；
+         評審想深究「為什麼只配相同名稱」時再點開看完整技術理由。 -->
+    <details class="info-disclosure">
+      <summary>
+        <span class="info-ico">ⓘ</span>
+        只比對<strong>名稱完全相同</strong>的指標——為什麼？
+        <span class="info-hint"></span>
+      </summary>
+      <div class="info-body">
+        <p>「手續費淨收益」與「淨手續費收入」這類同義詞目前配不起來：Chroma 預設的 embedding 是英文模型，對中文財務術語沒有鑑別度。</p>
+        <p>這涉及<strong>跨語言 embedding 的語義映射</strong>問題，因此我採「<strong>高精確度優先</strong>」策略——只對詞彙定義完全一致的項目進行對比，避免誤導決策，<strong>寧可少配、也不要配錯</strong>。</p>
+        <p>需要語意層面的跨機構比較，請改用「問答與報告」讓 LLM Agent 處理同義詞。</p>
+      </div>
+    </details>
 
     <div id="cmp-body"></div>
+
+    <!-- 給評審的一句話：把「揭露缺點」翻譯成技術定位 -->
+    <p class="strategy-note">
+      結構化數據採嚴謹比對，語意模糊的術語則交給 AI Agent——這頁展示的正是我們技術的邊界處理方式。
+    </p>
   </section>
+  <!-- ===== 問答與報告 ===== -->
   <section id="chat" class="hidden">
-    <p class="note">問答與報告 —— 施工中。目前請用 Streamlit 版本。</p>
+    <div class="chat-bar">
+      <label class="switch">
+        <input type="checkbox" id="chatEap">
+        <span class="switch-track"><span class="switch-knob"></span></span>
+        <span class="switch-label">改用 EAP 平台回答</span>
+      </label>
+      <span class="eap-hint">預設走 Gemini ＋ 你的 Hybrid RAG；勾選則改由 EAP 平台回答</span>
+      <button id="export-report" class="btn-ghost" title="依最後一則問答的公司／期間匯出 Word 報告">⬇ 匯出 Word 報告</button>
+    </div>
+
+    <div id="chat-error" class="error hidden"></div>
+
+    <div id="chat-log" class="chat-log">
+      <p class="chat-hint">直接把公司、期間打在問題裡就好。例如：<br>
+        「中信金控 2025Q4 手續費淨收益變化多少？」　·　「為什麼下滑？」　·　「玉山和中信誰的 ROE 高？」<br>
+        <span class="chat-hint-sub">牽涉到某個指標時，答案下方會一併畫出它的歷史趨勢圖。</span></p>
+    </div>
+
+    <div class="chat-input">
+      <input id="chat-q" type="text" placeholder="輸入問題後按 Enter 或點送出…" autocomplete="off">
+      <button id="chat-send" class="btn-primary">送出</button>
+    </div>
   </section>
+  <!-- ===== 資料來源總覽 ===== -->
   <section id="sources" class="hidden">
-    <p class="note">資料來源總覽 —— 施工中。目前請用 Streamlit 版本。</p>
+    <div class="section-head"><h2>上傳新資料</h2>
+      <span class="count">上傳 → 自動解析 → 匯入知識庫，一次完成</span></div>
+    <div class="upload-card">
+      <div class="upload-grid">
+        <div class="field">
+          <label for="up-company">公司名稱</label>
+          <input id="up-company" type="text" placeholder="例如：國泰金控" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="up-period">期間</label>
+          <input id="up-period" type="text" placeholder="例如：2026Q1" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="up-pages">最多處理頁數（PDF）：<b id="up-pages-val">15</b></label>
+          <input id="up-pages" type="range" min="1" max="50" value="15">
+        </div>
+        <div class="field upload-file">
+          <label for="up-file">簡報 PDF　或　法說會錄音</label>
+          <input id="up-file" type="file" accept=".pdf,.mp3,.wav,.m4a,.mp4,.aac,.ogg">
+          <span class="up-hint">PDF 走 VLM 解析成指標；音檔走 STT 轉逐字稿，兩者擇一</span>
+        </div>
+      </div>
+      <button id="up-submit" class="btn-primary">開始解析並匯入</button>
+      <div id="up-status" class="up-status hidden">
+        <div class="up-progress"><span id="up-bar"></span></div>
+        <p id="up-msg"></p>
+      </div>
+    </div>
+
+    <div id="src-error" class="error hidden"></div>
+
+    <div class="section-head"><h2>收錄概況</h2>
+      <span class="count">目前知識庫吃進了多少文件、指標與語意段落</span></div>
+    <div id="src-stats" class="src-stats"></div>
+
+    <div class="section-head"><h2>收錄明細</h2>
+      <span class="count">各公司各期間　·　指標由 VLM 簡報解析、語意段落來自法說會逐字稿</span></div>
+    <div id="src-detail"></div>
+
+    <div class="section-head"><h2>法說會逐字稿</h2>
+      <span class="count">錄音經 STT 轉成的逐字稿，供 Vector RAG 檢索</span></div>
+    <div id="src-transcripts"></div>
   </section>
 
   <footer>

@@ -127,6 +127,16 @@ def _pick_period_for_company(c, current_company, current_period):
     return periods[-1] if periods else None
 
 
+def _value_in_period(company, metric, period):
+    """某公司某期間裡這個指標的值；沒有回 None"""
+    return next((m["value"] for m in list_metrics(company, period) if m["metric"] == metric), None)
+
+
+def _periods_with_metric(company, metric):
+    """這個公司哪些期間有這個指標（照 list_periods 的時間順序）"""
+    return [p for p in list_periods(company) if _value_in_period(company, metric, p) is not None]
+
+
 def answer_question(question, company, this_period, last_period=None):
     """回傳結構化結果。單一公司的 CALC 類問題直接用公式結果組答案，不額外呼叫 LLM，節省額度。
     如果問題提到其他公司，會自動切換成跨公司比較模式：不強迫鎖定單一指標，
@@ -183,30 +193,54 @@ def answer_question(question, company, this_period, last_period=None):
         available = [m["metric"] for m in list_metrics(company, this_period)]
         route, metric_used = route_and_pick_metric(question, available)
 
+        # 這期沒挑到指標時，改用「全公司所有期間」的指標清單再挑一次。
+        # 使用者常會選到只有資產負債表的「財報」期，那裡沒有法說會簡報才有的
+        # 手續費淨收益、NIM 之類指標——不該因此就答不出來。
+        if route in ("CALC", "BOTH") and not metric_used:
+            available_all = sorted({m["metric"] for p in list_periods(company) for m in list_metrics(company, p)})
+            _, metric_used = route_and_pick_metric(question, available_all)
+
+        # 決定要用哪一期算：這期有就用這期；沒有就退到「最近有這個指標」的期間，
+        # 變化率則對它前一個有資料的期間比。
+        calc_period, prev_period = None, last_period
         if route in ("CALC", "BOTH") and metric_used:
-            current_value = next(
-                (m["value"] for m in list_metrics(company, this_period) if m["metric"] == metric_used),
-                None
-            )
-            change = None
-            if last_period:
-                change = calc_change(company, metric_used, this_period, last_period)
+            if _value_in_period(company, metric_used, this_period) is not None:
+                calc_period = this_period
+            else:
+                ps = _periods_with_metric(company, metric_used)
+                if ps:
+                    calc_period = ps[-1]
+                    prev_period = ps[-2] if len(ps) >= 2 else None
+
+        if calc_period:
+            current_value = _value_in_period(company, metric_used, calc_period)
+            change = calc_change(company, metric_used, calc_period, prev_period) if prev_period else None
             if current_value is not None:
-                calc_result = {"metric": metric_used, "value": current_value, "change": change}
+                calc_result = {"metric": metric_used, "value": current_value,
+                               "change": change, "period": calc_period}
 
         if route == "CALC" and calc_result:
-            change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
-            answer_text = f"{company} {this_period} 的{calc_result['metric']}為 {calc_result['value']}{change_text}。"
+            change_text = f"，較 {prev_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
+            answer_text = f"{company} {calc_result['period']} 的{calc_result['metric']}為 {calc_result['value']}{change_text}。"
+            if calc_result["period"] != this_period:
+                answer_text += f"（你選的 {this_period} 沒有這個指標，改用最近有資料的 {calc_result['period']}）"
             return {"answer": answer_text, "route": route, "calc_result": calc_result, "sources": []}
 
         if calc_result:
-            change_text = f"，較 {last_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
-            context_parts.append(f"[精確計算結果] {calc_result['metric']}：{calc_result['value']}{change_text}")
+            change_text = f"，較 {prev_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
+            period_note = "" if calc_result["period"] == this_period else f"（期間 {calc_result['period']}）"
+            context_parts.append(f"[精確計算結果]{period_note} {calc_result['metric']}：{calc_result['value']}{change_text}")
 
-        if route in ("NARRATIVE", "BOTH"):
+        # NARRATIVE/BOTH 要檢索；CALC 但連跨期都找不到指標時，也退回語意檢索，不要直接放棄
+        if route in ("NARRATIVE", "BOTH") or (route == "CALC" and not calc_result):
             vec_results = query_vector_rag(question, top_k=8, company=company, period=this_period)
             docs = vec_results.get("documents", [[]])[0]
             metas = vec_results.get("metadatas", [[]])[0]
+            if not docs:
+                # 這期沒有語意段落（例如財報期），放寬到不鎖期間、全公司再檢索一次
+                vec_results = query_vector_rag(question, top_k=8, company=company, period=None)
+                docs = vec_results.get("documents", [[]])[0]
+                metas = vec_results.get("metadatas", [[]])[0]
             if docs:
                 context_parts.append(f"[相關法說會敘述] {' '.join(docs)}")
                 sources.extend(metas)
