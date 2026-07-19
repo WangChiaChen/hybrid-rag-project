@@ -23,28 +23,61 @@ def index_narrative(doc_id, text, metadata):
     collection.upsert(documents=[text], metadatas=[metadata], ids=[doc_id])
 
 
+def delete_by_source(source):
+    """刪掉某個來源的所有段落（重新索引前先清掉舊的，避免殘留／重複）。"""
+    try:
+        collection.delete(where={"source": source})
+    except Exception:
+        pass
+
+
+import re as _re
+
+
+def _keywords(q):
+    """把問題拆成中文 2-gram ＋ 英數詞，用來做「字面關鍵字」比對。"""
+    q = str(q)
+    zh = _re.findall(r"[一-鿿]", q)
+    grams = {zh[i] + zh[i + 1] for i in range(len(zh) - 1)}
+    grams |= {w.lower() for w in _re.findall(r"[A-Za-z0-9]{2,}", q)}
+    # 去掉太泛用、幾乎每段都有的詞，避免它們把排序帶偏
+    stop = {"金控", "公司", "請問", "關於", "以及", "表現", "情況", "如何", "什麼", "多少"}
+    return {g for g in grams if g not in stop}
+
+
+def _kw_score(doc, grams):
+    d = doc.lower()
+    return sum(1 for g in grams if (g in doc) or (g in d))
+
+
 def query_vector_rag(question, top_k=5, company=None, period=None):
-    """語意檢索。company 可以是單一公司名稱字串，也可以是公司名稱的清單（跨公司比較用）。
-    會先撈比較多候選結果，再過濾掉不符合條件的內容。
+    """語意檢索（中文混合式）。
+
+    Chroma 預設 embedding 是英文模型，對中文問題排序不可靠，而且原本只抓全庫前 50 筆
+    再依公司過濾——排在後面的正確段落會被整個丟掉。改成：先抓「該公司該期」的全部候選，
+    再用「字面關鍵字命中數」重新排序（中文字面比對比英文 embedding 可靠），
+    embedding 名次只當同分時的次要依據。這樣問「發債計畫」就會撈到講發債那一段。
     """
     if company:
         companies = [company] if isinstance(company, str) else list(company)
         total = max(collection.count(), 1)
-        fetch_n = min(total, 50)
-        raw = collection.query(query_texts=[question], n_results=fetch_n)
+        raw = collection.query(query_texts=[question], n_results=total)  # 全撈，別讓正確段落在過濾前就被截掉
         docs = raw.get("documents", [[]])[0]
         metas = raw.get("metadatas", [[]])[0]
 
         filtered = []
-        for d, m in zip(docs, metas):
+        for rank, (d, m) in enumerate(zip(docs, metas)):
             source = m.get("source", "")
             if any(source.startswith(c) for c in companies) and (period is None or period in source):
-                filtered.append((d, m))
+                filtered.append((rank, d, m))
 
-        filtered = filtered[:top_k]
+        grams = _keywords(question)
+        # 排序鍵：關鍵字命中數（高優先）→ embedding 名次（次要，越前面越好）
+        filtered.sort(key=lambda t: (-_kw_score(t[1], grams), t[0]))
+        picked = filtered[:top_k]
         return {
-            "documents": [[d for d, _ in filtered]],
-            "metadatas": [[m for _, m in filtered]],
+            "documents": [[d for _, d, _ in picked]],
+            "metadatas": [[m for _, _, m in picked]],
         }
 
     return collection.query(query_texts=[question], n_results=top_k)

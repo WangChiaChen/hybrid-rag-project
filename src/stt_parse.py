@@ -80,10 +80,76 @@ def transcribe_audio(audio_path):
     return response.text
 
 
-def run_stt_and_ingest(audio_path, company, period):
-    """整合函式：錄音 -> 逐字稿 -> 直接寫入 Vector RAG，可被 app.py 呼叫"""
-    from vector_rag import index_narrative
+import re
 
+
+def _chunk_transcript(text, target=260, hard_max=600):
+    """把逐字稿切成多個「小段」再索引。
+
+    原本整份逐字稿存成一段——它的向量是所有主題（獲利、發債、聯名卡…）平均，
+    語意檢索時相似度被稀釋、撈不到特定主題。切成小段後，問「發債計畫」就能命中
+    講發債那一段。以說話人 [角色]／段落為界，太短的合併、太長的再依句子切開。
+    """
+    text = str(text).replace("\r", "")
+    blocks, cur = [], ""
+    for ln in text.split("\n"):
+        s = ln.strip()
+        if not s:
+            if cur:
+                blocks.append(cur); cur = ""
+            continue
+        new = bool(re.match(r"^(\*\*)?\[|^[\*\-•#]", s))  # 說話人標籤／項目符號／標題 → 換新段
+        if new and cur:
+            blocks.append(cur); cur = s
+        else:
+            cur = (cur + " " + s).strip() if cur else s
+    if cur:
+        blocks.append(cur)
+
+    def _clean(b):
+        b = b.replace("**", "")
+        b = re.sub(r"^\s*[\*\-•#]+\s*", "", b)
+        return b.strip()
+
+    blocks = [c for c in (_clean(b) for b in blocks) if len(c) >= 6]
+
+    chunks, buf = [], ""
+    for b in blocks:
+        if len(b) > hard_max:  # 單段太長 → 依句尾標點再切
+            for part in re.split(r"(?<=[。！？!?])", b):
+                part = part.strip()
+                if not part:
+                    continue
+                if buf and len(buf) + len(part) > target:
+                    chunks.append(buf); buf = ""
+                buf = (buf + part).strip()
+            continue
+        if buf and len(buf) + len(b) > target:
+            chunks.append(buf); buf = ""
+        buf = (buf + "  " + b).strip() if buf else b
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
+def index_transcript(company, period, transcript):
+    """把一份逐字稿切段後索引進 Vector RAG（重傳會先清掉舊的，避免重複）。"""
+    from vector_rag import index_narrative, delete_by_source
+
+    source = f"{company} {period} 法說會錄音"
+    delete_by_source(source)
+    chunks = _chunk_transcript(transcript)
+    for i, ch in enumerate(chunks, 1):
+        index_narrative(
+            doc_id=f"{company}_{period}_audio_{i}",
+            text=ch,
+            metadata={"source": source, "page": f"錄音 #{i}"},
+        )
+    return len(chunks)
+
+
+def run_stt_and_ingest(audio_path, company, period):
+    """整合函式：錄音 -> 逐字稿 -> 切段寫入 Vector RAG，可被 app.py 呼叫"""
     transcript = transcribe_audio(audio_path)
 
     out_dir = os.path.join(BASE_DIR, "outputs")
@@ -92,11 +158,7 @@ def run_stt_and_ingest(audio_path, company, period):
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(transcript)
 
-    index_narrative(
-        doc_id=f"{company}_{period}_audio",
-        text=transcript,
-        metadata={"source": f"{company} {period} 法說會錄音", "page": "audio"}
-    )
+    index_transcript(company, period, transcript)
     return transcript, out_path
 
 
