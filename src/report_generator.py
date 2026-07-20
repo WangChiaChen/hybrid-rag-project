@@ -199,6 +199,13 @@ def _add_answer(doc, text):
                 _add_inline(p, "•　" + _BULLET_RE.sub("", lines[i]))
                 i += 1
             continue
+        hm = re.match(r"^\s*#{1,6}\s+(.*)$", line)         # 標題 #／##／### → 粗體小標
+        if hm:
+            p = _para(doc, "", size=12, space_after=3)
+            p.paragraph_format.space_before = Pt(6)
+            _style_run(p.add_run(hm.group(1).strip()), size=12, bold=True, color=NAVY)
+            i += 1
+            continue
         if not line.strip():                              # 空行
             i += 1
             continue

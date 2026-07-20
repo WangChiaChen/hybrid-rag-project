@@ -606,6 +606,12 @@ function renderMarkdown(src) {
       }
       continue;
     }
+    const hm = line.match(/^\s*(#{1,6})\s+(.*)$/);  // 標題 #／##／### → 粗體小標，別露出米字號
+    if (hm) {
+      html += `<p class="md-h">${mdInline(hm[2])}</p>`;
+      i++;
+      continue;
+    }
     if (/^\s*\|.*\|/.test(line)) {                 // 表格
       const block = [];
       while (i < lines.length && /^\s*\|/.test(lines[i])) block.push(lines[i++]);
