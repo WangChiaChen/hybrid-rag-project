@@ -17,7 +17,13 @@ from dotenv import load_dotenv
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-EAP_BASE_URL = os.getenv("EAP_API_BASE_URL", "https://cloud.geminidata.com/api/portal/api10").rstrip("/")
+_EAP_DEFAULT_URL = "https://cloud.geminidata.com/api/portal/api10"
+# 容錯：EAP_API_BASE_URL 沒設、或被誤填成非網址（例如誤填成專案 ID）時，
+# 自動退回官方預設端點，避免出現「No scheme supplied」這種連不上的錯。
+_eap_url = (os.getenv("EAP_API_BASE_URL") or "").strip()
+if not _eap_url.startswith("http"):
+    _eap_url = _EAP_DEFAULT_URL
+EAP_BASE_URL = _eap_url.rstrip("/")
 EAP_PROJECT_ID = os.getenv("EAP_PROJECT_ID", "")
 EAP_API_KEY = os.getenv("EAP_API_KEY", "")
 
