@@ -15,3 +15,6 @@ graph_import.csv
 
 # Claude Code 本機工具設定（非共用）
 .claude/settings.local.json
+
+# Office 暫存／鎖定檔
+~$*
