@@ -58,6 +58,15 @@ def _expected_tokens(period):
         toks.add(f"FY{yy}")
     return toks
 
+# 子公司的名稱樣態。集團層級的比率不能拿子公司的來充數——第一金控簡報同時有
+# 「第一金年化股東權益報酬率 11.16%」（金控）和「一銀年化股東權益報酬率 9.72%」（銀行子公司），
+# 只擋「銀行」擋不到簡稱「一銀」，加上同分挑短名字，就會挑到子公司那筆、把第一金的 ROE 少報 1.4 個百分點。
+_SUBSIDIARY = [r"一銀", r"銀行", r"人壽", r"投信", r"產險", r"證券", r"世華", r"創投", r"投顧", r"創業投資"]
+
+# 集團／金控層級的名稱樣態，命中就加分。各家寫法不同：中信寫「中信金控」、
+# 玉山寫「金控」、第一金寫「第一金」或「集團」。
+_GROUP_LEVEL = [r"金控", r"集團", r"第一金(?!證券|投信|人壽|AMC)"]
+
 # 直接挑名稱最短、最乾淨的那筆標準比率。
 # score 越高越好：單位正確 > 命中偏好詞（金控層級）> 名稱短 > 不帶分期標籤 > 非累計
 STANDARD_METRICS = [
@@ -67,9 +76,9 @@ STANDARD_METRICS = [
         "type": "ratio",
         "unit": "%",
         "include": [r"ROE", r"股東權益報酬率"],
-        # 子公司（銀行／人壽／投信／產險／證券／世華／創投）與成長率都不是「集團 ROE」
-        "exclude": [r"成長", r"年增", r"銀行", r"人壽", r"投信", r"產險", r"證券", r"世華", r"創投"],
-        "prefer": [r"金控"],
+        # 子公司與成長率都不是「集團 ROE」
+        "exclude": [r"成長", r"年增"] + _SUBSIDIARY,
+        "prefer": _GROUP_LEVEL,
     },
     {
         "key": "ROA",
@@ -77,8 +86,8 @@ STANDARD_METRICS = [
         "type": "ratio",
         "unit": "%",
         "include": [r"ROA", r"資產報酬率"],
-        "exclude": [r"成長", r"年增", r"銀行", r"人壽", r"投信", r"產險", r"證券", r"世華", r"創投"],
-        "prefer": [r"金控"],
+        "exclude": [r"成長", r"年增"] + _SUBSIDIARY,
+        "prefer": _GROUP_LEVEL,
     },
     {
         "key": "NIM",
@@ -97,8 +106,8 @@ STANDARD_METRICS = [
         "unit": "%",
         "include": [r"資本適足率"],
         # 只要集團／金控層級，排除銀行子公司與第一/二類資本、總計等細項
-        "exclude": [r"銀行", r"第一類", r"第二類", r"人壽", r"產險", r"總計"],
-        "prefer": [r"金控"],
+        "exclude": [r"第一類", r"第二類", r"總計"] + _SUBSIDIARY,
+        "prefer": _GROUP_LEVEL,
     },
     {
         "key": "NPL",
