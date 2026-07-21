@@ -1108,15 +1108,27 @@ class ReportRequest(BaseModel):
 @app.post("/api/report")
 def report(req: ReportRequest):
     """產生 Word 報告。寫到記憶體不落地——部署後使用者碰不到伺服器磁碟。"""
+    ms = list_metrics(req.company, req.period)
+    # 單位要走跟 /api/metrics 同一套推定（同公司其他期間 → 同期錨點 → 指標型別），
+    # 否則畫面上顯示「-4,313 百萬元＊」的指標，匯出的報告卻是空白單位——
+    # 報告是拿去給人看的成果，不該比畫面少資訊。推定來的一樣標「＊」誠實揭露。
+    umap = _unit_map(req.company)
+    umap_norm = _unit_map_norm(req.company)
+    anchors = _anchor_units(ms, umap, umap_norm)
+
     summary = []
-    for m in list_metrics(req.company, req.period):
+    for m in ms:
         change = calc_change(req.company, m["metric"], req.period, req.last_period) if req.last_period else None
+        item = _metric_payload(req.company, m, umap, anchors, umap_norm)
+        unit = item["unit"] or ""
+        if unit and item["unit_inferred"]:
+            unit += "＊"
         summary.append({
             "name": m["metric"],
             "value": m["value"],
-            "unit": m.get("unit") or "",
+            "unit": unit,
             "change": change if change is not None else "",
-            "cumulative": is_cumulative(req.company, m["metric"]),
+            "cumulative": item["cumulative"],
         })
 
     buf = io.BytesIO()

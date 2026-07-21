@@ -269,7 +269,10 @@ def generate_report(company, period, metrics_summary, narrative_summary, output,
         _cell(cells[3], ctext, size=10, bold=(ctext != "—"), color=ccolor, align=WD_ALIGN_PARAGRAPH.RIGHT, shade=shade)
 
     _para(doc, "", space_after=2)
-    note = "註：變化欄採台灣慣例，紅色為上升、綠色為下降。標「累計」者為年初至今累計值，僅同季跨年度可比。"
+    # 單位帶「＊」代表原始簡報沒標、由系統依同公司其他期間或指標型別推定，要講清楚，
+    # 讀者才知道哪些單位是揭露值、哪些是推定值。
+    note = ("註：變化欄採台灣慣例，紅色為上升、綠色為下降。標「累計」者為年初至今累計值，僅同季跨年度可比。"
+            "單位標「＊」者為系統推定（原始簡報未標示）；顯示「—」代表無從推定，請勿與其他數字直接比大小。")
     _para(doc, note, size=8, color=GREY, space_after=4)
 
     # ---------- 二、AI 問答摘要 ----------
