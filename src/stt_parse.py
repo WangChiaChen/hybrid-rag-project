@@ -14,7 +14,22 @@ from dotenv import load_dotenv
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+# 跟 agent_router 一樣「用到才建立」——在 import 時就建立的話，部署環境沒設
+# GEMINI_API_KEY 會直接拋 ValueError，上傳錄音會掛在看不懂的錯誤上。
+_client = None
+
+
+def get_client():
+    global _client
+    if _client is None:
+        key = os.getenv("GEMINI_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "尚未設定 GEMINI_API_KEY，無法把錄音轉成逐字稿。"
+                "請在部署平台的環境變數（或本機 .env）填入你的 Gemini 金鑰。")
+        _client = genai.Client(api_key=key)
+    return _client
 
 
 def call_with_retry(fn, max_retries=4, base_wait=5):
@@ -70,7 +85,7 @@ def transcribe_audio(audio_path):
 
     mime_type = _guess_mime_type(audio_path)
 
-    response = call_with_retry(lambda: client.models.generate_content(
+    response = call_with_retry(lambda: get_client().models.generate_content(
         model="gemini-flash-lite-latest",
         contents=[
             types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),

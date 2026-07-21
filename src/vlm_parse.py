@@ -18,7 +18,23 @@ from dotenv import load_dotenv
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+# 跟 agent_router 一樣「用到才建立」。在 import 時就建立的話，部署環境沒設
+# GEMINI_API_KEY 會直接拋 ValueError——api.py 是延遲 import 所以服務起得來，
+# 但上傳簡報會掛在一個看不懂的錯誤上，而不是下面那句講清楚的提示。
+_client = None
+
+
+def get_client():
+    global _client
+    if _client is None:
+        key = os.getenv("GEMINI_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "尚未設定 GEMINI_API_KEY，無法用 VLM 解析簡報。"
+                "請在部署平台的環境變數（或本機 .env）填入你的 Gemini 金鑰。")
+        _client = genai.Client(api_key=key)
+    return _client
 
 
 def call_with_retry(fn, max_retries=4, base_wait=5):
@@ -61,7 +77,7 @@ def parse_slide_image(image_path):
     with open(image_path, "rb") as f:
         img_bytes = f.read()
 
-    response = call_with_retry(lambda: client.models.generate_content(
+    response = call_with_retry(lambda: get_client().models.generate_content(
         model="gemini-flash-lite-latest",
         contents=[
             types.Part.from_bytes(data=img_bytes, mime_type="image/png"),
