@@ -134,6 +134,20 @@
   </section>
   <!-- ===== 問答與報告 ===== -->
   <section id="chat" class="hidden">
+    <!-- 問答範圍：選了公司／期間後，後續提問自動鎖定該範圍，不必每題重打。
+         預設「不指定」，維持原本「把公司期間打在問題裡」的用法。 -->
+    <div class="chat-scope">
+      <div class="field">
+        <label for="chatCompany">鎖定公司</label>
+        <select id="chatCompany"></select>
+      </div>
+      <div class="field">
+        <label for="chatPeriod">鎖定期間</label>
+        <select id="chatPeriod"></select>
+      </div>
+      <span class="scope-hint">選了就不用每題重打公司／期間；預設「不指定」，仍可直接把公司期間寫在問題裡。</span>
+    </div>
+
     <div class="chat-bar">
       <label class="switch">
         <input type="checkbox" id="chatEap">

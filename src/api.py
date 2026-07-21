@@ -33,9 +33,9 @@ from graph_rag import (
     list_metrics,
     list_periods,
 )
-from metric_alignment import classify_metric
+from metric_alignment import classify_metric, is_cross_comparable
 from report_generator import generate_report
-from standard_metrics import align_standard, key_ratios
+from standard_metrics import STANDARD_METRICS, _pick, align_standard, key_ratios
 from vector_rag import get_all_sources
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -58,15 +58,110 @@ app.add_middleware(
 TYPE_LABEL = {"ratio": "比率", "per_share": "每股", "amount": "金額"}
 
 
-def _metric_payload(company: str, m: dict) -> dict:
+# 指標名稱裡的期別標籤（3M26、1Q26、FY24、2025年…），拿掉後同一指標的不同期別會歸為同一個
+_NAME_PERIOD_TAG = re.compile(r"\(?\s*(?:\d[QH]\d{2}|\d+M\d{2}|FY\d{2}|20\d{2}年?|1[01]\d年)\s*\)?")
+
+
+def _norm_metric_name(name: str) -> str:
+    """把「2025年合併稅後淨利」「3M26合併稅後淨利」正規化成同一個「合併稅後淨利」。
+    注意只拿掉期別標籤，不動「第一季」這種字——中信「中信銀行稅後淨利(百萬元)」與
+    「中信銀行第一季稅後淨利(億元)」是同一筆金額的不同單位，合併會套錯單位。"""
+    return _NAME_PERIOD_TAG.sub("", str(name)).strip(" -－()（）")
+
+
+def _unit_map_norm(company: str) -> dict:
+    """和 _unit_map 一樣，但用「去掉期別標籤的名稱」當鍵，補得更廣一點。"""
+    from collections import Counter
+    acc: dict = {}
+    for p in list_periods(company):
+        for m in list_metrics(company, p):
+            u = m.get("unit")
+            if u:
+                acc.setdefault(_norm_metric_name(m["metric"]), Counter())[u] += 1
+    return {k: c.most_common(1)[0][0] for k, c in acc.items()}
+
+
+def _fill_unit(name: str, raw_unit, umap: dict, umap_norm: Optional[dict] = None):
+    """補單位。來源簡報常漏標（中信有 37% 的指標沒單位），沒單位的數字無從解讀。
+    順序：本期有標就用 → 同公司其他期間標過的 → 依指標型別推定（比率→%、每股→元）。
+    金額類「不推定」——百萬元和億元差 100 倍，猜錯比留白更糟，寧可誠實標示未知。
+    回傳 (單位, 是否為推定)。
+    """
+    if raw_unit and str(raw_unit).strip() not in ("", "None"):
+        return raw_unit, False
+    u = umap.get(name)
+    if u:
+        return u, True
+    if umap_norm:
+        u = umap_norm.get(_norm_metric_name(name))
+        if u:
+            return u, True
+    kind = classify_metric(name)
+    if kind == "ratio":
+        return "%", True
+    if kind == "per_share":
+        return "元", True
+    return None, False
+
+
+# 換算成「元」的倍率，用來做同期不同單位的金額比對
+_UNIT_SCALE = {"千元": 1e3, "百萬元": 1e6, "NT$MN": 1e6, "NT$ mn": 1e6,
+               "億元": 1e8, "十億元": 1e9, "兆元": 1e12}
+
+
+def _anchor_units(ms: list, umap: dict, umap_norm: Optional[dict] = None) -> dict:
+    """用「同一筆金額在同期以不同單位重複揭露」反推缺漏的單位。
+
+    例：中信同一期同時有「中信銀行稅後淨利 16,586（百萬元）」與
+    「中信銀行第一季稅後淨利 166（沒單位）」——166 億元 ＝ 16,586 百萬元，
+    金額對得起來就能確定後者是「億元」。這是資料自我校驗，比用數值大小硬猜可靠
+    （實測百萬元 282~127,587 與億元 1~5,607 範圍大幅重疊，量級根本猜不準）。
+    配不到錨點就不猜，維持「單位未標示」。
+    """
+    anchors = []
+    for m in ms:
+        u, _ = _fill_unit(m["metric"], m.get("unit"), umap, umap_norm)
+        s = _UNIT_SCALE.get(str(u).strip()) if u else None
+        v = _cell_to_float(m.get("value"))
+        if s and v:
+            anchors.append(abs(v) * s)
+    out: dict = {}
+    if not anchors:
+        return out
+    for m in ms:
+        u, _ = _fill_unit(m["metric"], m.get("unit"), umap, umap_norm)
+        if u or classify_metric(m["metric"]) != "amount":
+            continue
+        v = _cell_to_float(m.get("value"))
+        if not v:
+            continue
+        for cand in ("億元", "百萬元", "十億元", "千元"):
+            real = abs(v) * _UNIT_SCALE[cand]
+            if any(a and abs(real - a) / a < 0.01 for a in anchors):
+                out[m["metric"]] = cand
+                break
+    return out
+
+
+def _metric_payload(company: str, m: dict, umap: Optional[dict] = None,
+                    anchor_units: Optional[dict] = None,
+                    umap_norm: Optional[dict] = None) -> dict:
     """統一的指標輸出格式。unit/cumulative 一定要帶——前端要靠它們決定能不能比大小。"""
+    unit, inferred = _fill_unit(m["metric"], m.get("unit"), umap or {}, umap_norm)
+    if not unit and anchor_units:
+        anchored = anchor_units.get(m["metric"])
+        if anchored:
+            unit, inferred = anchored, True
+    kind = classify_metric(m["metric"], unit)
     return {
         "metric": m["metric"],
         "value": m["value"],
-        "unit": m.get("unit"),
+        "unit": unit,
+        # 推定來的單位要標記，前端會加上「＊」誠實揭露，不假裝是原始揭露值
+        "unit_inferred": inferred,
         "yoy": m.get("yoy"),
-        "type": TYPE_LABEL.get(classify_metric(m["metric"], m.get("unit")), "金額"),
-        "comparable": classify_metric(m["metric"], m.get("unit")) in ("ratio", "per_share"),
+        "type": TYPE_LABEL.get(kind, "金額"),
+        "comparable": kind in ("ratio", "per_share"),
         "cumulative": is_cumulative(company, m["metric"]),
     }
 
@@ -97,9 +192,12 @@ def metrics(
     if not ms:
         raise HTTPException(404, f"{company} {period} 沒有資料")
 
+    umap = _unit_map(company)                        # 同公司其他期間標過的單位
+    umap_norm = _unit_map_norm(company)              # 同指標不同期別標籤（2025年X / 3M26X）共用單位
+    anchors = _anchor_units(ms, umap, umap_norm)     # 同期「同金額不同單位」互相校驗，反推剩下的
     out = []
     for m in ms:
-        item = _metric_payload(company, m)
+        item = _metric_payload(company, m, umap, anchors, umap_norm)
         # calc_change 自己會擋掉累計指標的跨季比較，回 None 而不是假數字
         item["change"] = calc_change(company, m["metric"], period, last_period) if last_period else None
         out.append(item)
@@ -386,8 +484,10 @@ def _eap_chart_from_directive(answer: str, company: str, period: str):
         return cleaned, {"kind": "series", "title": title or f"{c} 各期{metric or tbl['label']}",
                          "metric": metric or tbl["label"] or "數值", "unit": "", "points": tbl["points"]}
 
-    # 1) 沒有資料表，但指令點名了某個具體指標 → 用我們 Graph RAG 的該指標各期
-    if metric:
+    # 1) 沒有資料表，但指令點名了某個具體指標 → 用我們 Graph RAG 的該指標各期。
+    #    只對「比率／每股」畫趨勢：絕對金額同名常不同義（年度值 vs 單季值，單位還混用百萬/億/十億），
+    #    跨期畫會畫出假的暴跌。金額類就不畫這條線，改走下方的標準關鍵比率圖。
+    if metric and is_cross_comparable(metric):
         t = trend(company=c, metric=metric)
         pts = t.get("points", [])
         if pts:
@@ -395,13 +495,220 @@ def _eap_chart_from_directive(answer: str, company: str, period: str):
             return cleaned, {"kind": "series", "title": title or f"{c} 各期{metric}",
                              "metric": metric, "unit": _metric_unit(c, metric), "points": pts}
 
-    # 2) 否則畫「標準關鍵比率」（單位一致 %）
+    # 點名的是「絕對金額」指標 → 跨期畫不可靠、不畫；也別改畫不相干的比率圖（標題會對不上內容），
+    # 就不附圖，讓答案只留 EAP 表格，乾淨不誤導。
+    if metric and not is_cross_comparable(metric):
+        return cleaned, None
+
+    # 2) 沒點名具體指標 → 畫「標準關鍵比率」（單位一致 %）
     p = _infer_period(directive, c) if re.search(r"Q[1-4]|第.季|20\d{2}", directive) else period
     items = key_ratios(c, p)
     if not items:
         return cleaned, None
     cleaned += "\n\n（下圖為系統依 Graph RAG 數據繪製的標準關鍵比率，單位皆為 %）"
-    return cleaned, {"kind": "bars", "title": title or f"{c} {p} 主要績效指標", "items": items}
+    # 這條路一律畫「標準關鍵比率」，所以標題要照實寫，不要沿用 EAP 指令的標題
+    # （EAP 常給「各期手續費淨收益」這種標題，掛在比率圖上會標題文不對圖）
+    return cleaned, {"kind": "bars", "title": f"{c} {p} 主要關鍵比率", "items": items}
+
+
+# ---------- EAP 答案交叉驗證 ----------
+# EAP 是外部平台，它的數字我們無法保證正確。這裡把 EAP 答案裡的標準指標
+# （EPS／ROE／ROA…）跟我們自己「本地知識庫（Graph RAG）」挑出的乾淨數字比對，
+# 差太多就標出來，提醒使用者「這筆對不上，請留意」——做的是交叉驗證，不是斷言誰對。
+
+def _cell_to_float(cell):
+    m = re.search(r"-?[\d,]+\.?\d*", str(cell))
+    if not m:
+        return None
+    try:
+        return float(m.group().replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _resolve_company(cell):
+    """把表格裡的公司欄位對回知識庫的正式公司名（支援「玉山」這種簡稱）。"""
+    from agent_router import _short_name
+    s = str(cell).strip()
+    if not s:
+        return None
+    for c in list_companies():
+        if c == s:
+            return c
+    for c in list_companies():
+        if c in s or (_short_name(c) and _short_name(c) in s):
+            return c
+    return None
+
+
+def _match_period(company, period):
+    """把「2026Q1」對到該公司實際存在的期間資料夾（可能是 2026Q1 或 2026Q1財報）。"""
+    if not period:
+        return None
+    ps = list_periods(company)
+    if period in ps:
+        return period
+    if f"{period}財報" in ps:
+        return f"{period}財報"
+    for p in ps:
+        if p.startswith(period):
+            return p
+    return None
+
+
+def _spec_for_text(text):
+    """看一段文字（通常是表頭）像哪個標準指標。"""
+    t = str(text)
+    for spec in STANDARD_METRICS:
+        if any(re.search(p, t) for p in spec["include"]):
+            return spec
+    return None
+
+
+def _significant_gap(eap_val, local_val):
+    """EAP 值與本地值是否差到值得提醒：相對差 >5% 且絕對差夠大（避免抓四捨五入）。
+    門檻設在 5%：像「抓錯季度」這種差 ~9% 的錯也要抓得到，但仍會放過純四捨五入。"""
+    diff = abs(eap_val - local_val)
+    if local_val == 0:
+        return diff > 0.01
+    rel = diff / abs(local_val)
+    return rel > 0.05 and diff > 0.02
+
+
+def _num_near_metric(segment, spec):
+    """在一段文字裡，抓「指標名稱附近」的數值（比率取 %、每股取 元）。
+    優先取指標關鍵字之後最近的那個數字，避免抓到年增率等旁邊的數字。"""
+    mpos = -1
+    for p in spec["include"]:
+        m = re.search(p, segment, re.I)
+        if m:
+            mpos = m.start()
+            break
+    pat = r"(\d+\.?\d*)\s*%" if spec["unit"] == "%" else r"(\d+\.?\d*)\s*元"
+    cands = [(m.start(), float(m.group(1))) for m in re.finditer(pat, segment)]
+    if not cands and spec["unit"] != "%":  # 每股類有時沒帶「元」，退而取「為 X」
+        cands = [(m.start(), float(m.group(1))) for m in re.finditer(r"為\s*\**\s*(\d+\.?\d*)", segment)]
+    if not cands:
+        return None
+    if mpos >= 0:
+        after = [c for c in cands if c[0] >= mpos]
+        if after:
+            return after[0][1]
+    return cands[0][1]
+
+
+def _cross_check_prose(answer, fallback_period):
+    """純文字（非表格）答案的交叉驗證：把文中每家公司講到的標準指標數字，跟本地知識庫比。
+    以「公司名出現的位置」把文字切段，各段內找指標與數值配對——EAP 常一句話講一家，切段夠用。"""
+    text = str(answer)
+    # 純文字用「完整公司名」比對就好——用簡稱會誤撞（如「第一」金控 vs「第一季」）。
+    # EAP 的答案幾乎都寫全名，全名對不到頂多漏報，總比誤報一家不相干的公司好。
+    positions = [(text.find(c), c) for c in list_companies() if text.find(c) >= 0]
+    positions.sort()
+    if not positions:
+        return []
+
+    out = []
+    for i, (pos, c) in enumerate(positions):
+        end = positions[i + 1][0] if i + 1 < len(positions) else len(text)
+        segment = text[pos:end]
+        spec = _spec_for_text(segment)
+        if not spec:
+            continue
+        pm = re.search(r"20\d{2}\s*Q[1-4]", segment)
+        period = pm.group().replace(" ", "") if pm else fallback_period
+        period = _match_period(c, period)
+        if not period:
+            continue
+        eap_val = _num_near_metric(segment, spec)
+        if eap_val is None:
+            continue
+        pick = _pick(list_metrics(c, period), spec, period)
+        if not pick:
+            continue
+        local_val = round(pick["value"], 2)
+        if _significant_gap(eap_val, local_val):
+            out.append({
+                "company": c,
+                "metric": spec["label"],
+                "period": period,
+                "eap_value": eap_val,
+                "local_value": local_val,
+                "local_source": pick["name"],
+            })
+    return out
+
+
+def cross_check_eap(answer, fallback_period):
+    """比對 EAP 答案中的標準指標數字與本地知識庫，回傳不一致清單。
+    有表格就比表格（較可靠）；沒表格則退回逐句解析純文字答案。"""
+    rows = []
+    for ln in str(answer).split("\n"):
+        s = ln.strip()
+        if s.startswith("|") and s.count("|") >= 2:
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if all(set(c) <= set("-: ") for c in cells):  # 分隔列
+                continue
+            rows.append(cells)
+    if len(rows) < 2:
+        return _cross_check_prose(answer, fallback_period)
+
+    header, body = rows[0], rows[1:]
+    # 哪幾欄是「標準指標的數值欄」——看表頭認得出指標的才算
+    col_spec = {i: _spec_for_text(header[i]) for i in range(len(header))}
+    if not any(col_spec.values()):
+        return []
+
+    out = []
+    for r in body:
+        company = next((rc for rc in (_resolve_company(c) for c in r) if rc), None)
+        if not company:
+            continue
+        period = fallback_period
+        for c in r:
+            pm = re.search(r"20\d{2}\s*Q[1-4]", c)
+            if pm:
+                period = pm.group().replace(" ", "")
+                break
+        period = _match_period(company, period)
+        if not period:
+            continue
+        ms = list_metrics(company, period)
+        for i, cell in enumerate(r):
+            spec = col_spec.get(i)
+            if not spec:
+                continue
+            eap_val = _cell_to_float(cell)
+            if eap_val is None:
+                continue
+            pick = _pick(ms, spec, period)
+            if not pick:
+                continue
+            local_val = round(pick["value"], 2)
+            if _significant_gap(eap_val, local_val):
+                out.append({
+                    "company": company,
+                    "metric": spec["label"],
+                    "period": period,
+                    "eap_value": eap_val,
+                    "local_value": local_val,
+                    "local_source": pick["name"],
+                })
+    return out
+
+
+def _metric_aliases(text):
+    """問題若點到某個標準指標，回傳它的同義詞（含英文縮寫）。
+    各家用詞不一（國泰「淨利差」、玉山「淨利息收益率」都是 NIM），問 EAP 時把別名一併附上，
+    EAP 的檢索器才不會因為用詞不同而回「查不到」。同義詞來源就是本地的標準比率字典。"""
+    aliases = set()
+    for spec in STANDARD_METRICS:
+        if any(re.search(p, text, re.I) for p in spec["include"]):
+            for p in spec["include"]:
+                clean = p.replace(r"\b", "").strip()
+                if clean and re.fullmatch(r"[\w一-鿿() ]+", clean):
+                    aliases.add(clean)
+    return sorted(aliases)
 
 
 @app.post("/api/chat")
@@ -411,15 +718,38 @@ def chat(req: ChatRequest):
 
     if req.use_eap:
         # EAP 的檢索器對多公司混合查詢會漏抓，ask_smart 會自動拆解成逐家查詢
-        from eap_client import ask_smart, get_or_create_chat
-        q = req.question
+        from eap_client import _short_name, ask_smart, get_or_create_chat
+        original = req.question
+        # 使用者若「鎖定」了公司／期間（下拉選單明確選了，非系統推測），把它明講給 EAP，
+        # 否則像「eps」這種問題 EAP 收不到公司脈絡，會自己亂挑公司答（甚至跳過你要問的那家）。
+        # 只在明確鎖定時注入，系統推測的就不硬塞，以免用猜錯的公司誤導 EAP。
+        scope = " ".join(x for x in (req.company, req.period) if x)
+        # 判斷是不是「比較題」：問題已點名鎖定以外的其他公司，或帶比較字眼。
+        # 比較題不能用「只針對X、不要提及其他公司」——那會跟比較意圖打架，導致 EAP 回「查不到」。
+        others = [c for c in list_companies() if c != req.company
+                  and (c in original or (_short_name(c) and _short_name(c) in original))]
+        is_compare = bool(others) or bool(re.search(r"比較|相比|對比|對照|vs|誰|哪一?家|哪個", original, re.I))
+        if scope and is_compare:
+            q = f"請以「{scope}」為主要對象回答，可與問題中提到的其他公司比較：{original}"
+        elif scope:
+            q = f"請只針對「{scope}」回答，不要提及其他公司：{original}"
+        else:
+            q = original
+        # 同義詞增補：各家指標用詞不一（國泰「淨利差」vs 玉山「淨利息收益率」都是 NIM），
+        # 把別名一併告訴 EAP，避免它因用詞不同而回「查不到」。
+        aliases = _metric_aliases(original)
+        alias_hint = f"（此指標的常見別名：{'、'.join(aliases)}，任一名稱的數據皆可採用）" if aliases else ""
+        if alias_hint:
+            q += alias_hint
+        focus = (original + alias_hint) if is_compare else None
         # 問到圖表時，EAP 只回「畫圖指令」卻常漏掉數字。明確要它先用表格列出各期數值，
         # 我們才能用「EAP 自己的數據」把圖畫出來，讓圖和它的答案一致。
         if re.search(r"圖|chart|長條|直條|趨勢|走勢|各期|視覺化|bar", q, re.I):
             q += "\n\n（若要呈現圖表，請務必先用 markdown 表格完整列出各期的數值，再附上圖表。）"
         try:
             chat_id = get_or_create_chat()
-            answer = ask_smart(chat_id, q, list_companies())
+            # 比較題把使用者真正問的指標（含同義詞）帶進去逐家查，避免被寫死的績效清單漏掉（如 NIM）
+            answer = ask_smart(chat_id, q, list_companies(), focus=focus)
         except Exception as e:
             raise HTTPException(502, f"EAP 平台連線失敗：{e}")
         # 優先用 EAP 答案裡的資料表畫圖；沒有才退回我們的 Graph RAG
@@ -428,6 +758,13 @@ def chat(req: ChatRequest):
                 "company": company, "period": period, "last_period": req.last_period}
         if bar:
             resp["chart_bar"] = bar
+        # 交叉驗證：EAP 的數字跟本地知識庫差太多就標出來提醒
+        try:
+            gaps = cross_check_eap(answer, period)
+            if gaps:
+                resp["cross_check"] = gaps
+        except Exception:
+            pass  # 交叉驗證只是加值提醒，出錯不能影響主回答
         return resp
 
     result = answer_question(
@@ -436,9 +773,10 @@ def chat(req: ChatRequest):
         this_period=period,
         last_period=req.last_period,
     )
-    # 若答案牽涉某個指標，附上它的歷史趨勢，讓前端把「圖」也畫出來，而不是只有文字
+    # 若答案牽涉某個指標，附上它的歷史趨勢，讓前端把「圖」也畫出來，而不是只有文字。
+    # 一樣只對「比率／每股」畫趨勢，絕對金額基準/單位不一致，跨期畫會誤導。
     cr = result.get("calc_result")
-    if cr and cr.get("metric"):
+    if cr and cr.get("metric") and is_cross_comparable(cr["metric"]):
         t = trend(company=company, metric=cr["metric"])
         if len(t.get("points", [])) >= 2:
             result["chart"] = t

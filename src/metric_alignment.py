@@ -14,6 +14,8 @@ embed_fn = embedding_functions.DefaultEmbeddingFunction()
 _RATIO_KEYWORDS = (
     "率", "%", "占比", "比重", "ROE", "ROA", "NIM",
     "利差", "適足", "清償能力", "覆蓋", "存放比", "成長", "年增", "季增",
+    # 「獲利組成 - 銀行 60 / 人壽 28 / 其他 11」這種占比，加總約 100，是百分比不是金額
+    "組成",
 )
 _PER_SHARE_KEYWORDS = ("每股", "EPS")
 

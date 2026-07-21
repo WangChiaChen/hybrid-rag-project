@@ -110,23 +110,28 @@ def detect_companies_in_question(question, known_companies):
     return hits
 
 
-def ask_smart(chat_id, question, known_companies, streaming=True):
+def ask_smart(chat_id, question, known_companies, streaming=True, focus=None):
     """對 EAP 平台問問題，但針對「跨公司比較」做查詢拆解。
 
     實測發現：EAP 平台的檢索遇到「中信和國泰比較」這種混合查詢時會撈不到資料、
     誤答「查不到」；但逐家單獨問績效則完全正常。因此當問題同時提到 2 家以上公司時，
     改成先逐家各問一次（會成功），再把撈到的數據內嵌進最後一次提問讓平台直接比較，
     避免平台的檢索器成為瓶頸。單一公司問題則維持原本行為。
+
+    focus：使用者真正想問的指標／期間（例如「2026Q1 淨利息收益率」）。給了就以它為準
+    逐家查，沒給才退回泛用的績效重點——否則像 NIM、資本適足率這種問題，會被寫死的
+    「淨利／EPS／ROE」清單漏掉，導致明明有資料卻回「查不到」。
     """
     companies = detect_companies_in_question(question, known_companies)
     if len(companies) < 2:
         return ask_question(chat_id, question, streaming)
 
+    ask_for = (focus or "").strip() or "最近一季的績效重點（稅後淨利、每股盈餘EPS、股東權益報酬率ROE、主要成長率等）"
     facts = []
     for c in companies:
         sub_q = (
-            f"請只查詢並回答「{c}」最近一季的績效重點"
-            f"（稅後淨利、每股盈餘EPS、股東權益報酬率ROE、主要成長率等），只回答這一家。"
+            f"請只查詢並回答「{c}」，只回答這一家、不要提到其他公司。"
+            f"請針對以下問題查出「{c}」的對應數字（若有指定指標與期間，以其為準）：{ask_for}"
         )
         ans = ask_question(chat_id, sub_q, streaming)
         facts.append(f"【{c}】\n{ans.strip()}")

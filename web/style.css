@@ -198,6 +198,14 @@ body {
    但顏色讓人一眼看出是流出／虧損。 */
 .card .val.neg { color: var(--up); }
 .card .unit { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 5px; }
+/* 推定來的單位：帶「＊」，用虛線底線暗示「這是推定值、滑上去有說明」 */
+.card .unit.inferred { border-bottom: 1px dotted var(--muted); cursor: help; }
+/* 原始簡報就沒標單位（多為絕對金額）——明講出來，免得被誤當同級距比較 */
+.card .unit.unknown {
+  font-size: 11px; color: #A0562E; background: #FBF0E7;
+  border: 1px solid #F0D8C4; border-radius: 2px;
+  padding: 1px 5px; cursor: help; white-space: nowrap;
+}
 
 /* meta 列只有真的有東西才出現——沒內容的空標籤是視覺雜訊 */
 .card .meta { margin-top: 10px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -567,6 +575,31 @@ footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height
 }
 .calc-verify strong { color: #0F4A2B; }
 
+/* 交叉驗證警示：EAP 數字與本地知識庫對不上 */
+.cross-warn {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #8A2B27;
+  background: #FCECEB;
+  border: 1px solid #F2C4C1;
+  border-left: 3px solid var(--up);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.cross-warn-head { font-weight: 700; margin-bottom: 6px; }
+.cross-warn ul { margin: 0; padding-left: 18px; }
+.cross-warn li { margin: 3px 0; line-height: 1.6; }
+.cross-warn .xc-eap { color: var(--up); }
+.cross-warn .xc-local { color: #0F4A2B; }
+.cross-warn-foot { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.xc-reask {
+  margin-left: 8px; padding: 2px 10px;
+  font-family: var(--font); font-size: 12px; color: #fff;
+  background: var(--primary); border: 0; border-radius: 999px;
+  cursor: pointer; white-space: nowrap; vertical-align: middle;
+}
+.xc-reask:hover { background: var(--primary-2); }
+
 /* 答案裡的趨勢圖 */
 .bot-chart {
   margin-top: 12px;
@@ -587,13 +620,34 @@ footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height
 }
 
 /* 問答頂列：EAP 開關 + 匯出按鈕 */
+/* 問答範圍選單：鎖定公司／期間 */
+.chat-scope {
+  display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin: 22px 0 12px;
+}
+.chat-scope .scope-hint {
+  flex: 1 1 220px; align-self: center;
+  font-size: 12px; color: var(--muted); line-height: 1.5;
+}
+.chat-scope select:disabled { opacity: .55; cursor: not-allowed; }
+.scope-chip {
+  display: inline-block; margin-right: 8px; padding: 1px 8px;
+  font-size: 12px; border-radius: 999px;
+  background: rgba(255,255,255,.22); color: inherit;
+  vertical-align: middle;
+}
+
 .chat-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 12px 16px;
-  margin: 22px 0 14px;
+  margin: 0 0 14px;
 }
 .chat-bar .eap-hint { flex: 1 1 auto; }
 .chat-bar #export-report { margin-left: auto; }

@@ -108,12 +108,23 @@ function deltaHtml(m) {
   return `<span class="delta ${cls}">${m.change > 0 ? "+" : ""}${m.change}%</span>`;
 }
 
+// 單位：有就顯示；推定來的加「＊」誠實揭露；真的沒有（金額類無從推定）就明講「單位未標示」，
+// 免得使用者把 16,586（百萬元）和 231（億元）當成同一個級距在比。
+function unitHtml(m) {
+  if (m.unit) {
+    return m.unit_inferred
+      ? `<span class="unit inferred" title="單位為系統依指標型別推定，原始簡報未標示">${m.unit}＊</span>`
+      : `<span class="unit">${m.unit}</span>`;
+  }
+  return `<span class="unit unknown" title="原始簡報未標示單位，無法判斷數量級，請勿直接與其他數字比大小">單位未標示</span>`;
+}
+
 function cardHtml(m, hero) {
   const n = num(m.value);
   const neg = !isNaN(n) && n < 0;
   return `
     <div class="name">${annotateTerms(m.metric)}</div>
-    <div class="val ${neg ? "neg" : ""}">${m.value}${m.unit ? `<span class="unit">${m.unit}</span>` : ""}</div>
+    <div class="val ${neg ? "neg" : ""}">${m.value}${unitHtml(m)}</div>
     <div class="meta">${deltaHtml(m)}</div>
     ${hero ? "" : '<div class="spark"></div><div class="spark-label"></div>'}`;
 }
@@ -555,13 +566,64 @@ const ROUTE_BADGE = {
   EAP: ["EAP 平台回答", "b-both"],
 };
 
+const SCOPE_NONE = "（不指定）";   // 「不選」選項：值為空字串，代表交給後端自動辨識
+
 function initChat() {
   const c0 = COMPANIES[0];
   const ps0 = c0.periods || [];
   chatCtx = { company: c0.name, period: ps0[ps0.length - 1] || "", last_period: null };
+
+  // 公司選單：第一項是「不指定」，其餘為各公司；預設停在「不指定」
+  const comp = $("chatCompany");
+  comp.innerHTML = "";
+  [SCOPE_NONE, ...COMPANIES.map((c) => c.name)].forEach((name) => {
+    const o = document.createElement("option");
+    o.value = name === SCOPE_NONE ? "" : name;
+    o.textContent = name;
+    comp.appendChild(o);
+  });
+  comp.onchange = onChatCompanyChange;
+  onChatCompanyChange();   // 初始化期間選單（此時公司為不指定 → 期間停用）
+
   $("chat-send").onclick = sendChat;
   $("chat-q").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
   $("export-report").onclick = exportReport;
+
+  // 紅框裡「改用本地知識庫重問」按鈕：用事件委派接（訊息是動態生成的）
+  $("chat-log").addEventListener("click", (e) => {
+    const btn = e.target.closest(".xc-reask");
+    if (btn) askLocal(btn.dataset.company, btn.dataset.period, btn.dataset.metric);
+  });
+}
+
+// 關掉 EAP、鎖定該公司／期間，用本地 Hybrid RAG（Graph RAG）重問這個指標，
+// 直接拿到系統以公式驗證的正確數字，不再受 EAP 影響。
+function askLocal(company, period, metric) {
+  const comp = $("chatCompany");
+  if ([...comp.options].some((o) => o.value === company)) {
+    comp.value = company;
+    onChatCompanyChange();           // 重填期間選單
+  }
+  const per = $("chatPeriod");
+  if ([...per.options].some((o) => o.value === period)) per.value = period;
+  $("chatEap").checked = false;      // 走本地，不走 EAP
+  $("chat-q").value = metric;
+  sendChat();
+}
+
+// 公司改變時，重填期間選單：沒選公司就只留「不指定」並停用；選了就列出該公司各期
+function onChatCompanyChange() {
+  const name = $("chatCompany").value;
+  const per = $("chatPeriod");
+  const ps = name ? periodsOf(name) : [];
+  per.innerHTML = "";
+  [SCOPE_NONE, ...ps].forEach((v) => {
+    const o = document.createElement("option");
+    o.value = v === SCOPE_NONE ? "" : v;
+    o.textContent = v;
+    per.appendChild(o);
+  });
+  per.disabled = !name;   // 未選公司時，期間無從選起
 }
 
 // ---------- 迷你 Markdown 渲染 ----------
@@ -654,15 +716,25 @@ async function sendChat() {
   const hint = $("chat-log").querySelector(".chat-hint");
   if (hint) hint.remove();
 
-  appendMsg("me", escapeHtml(q));
+  // 鎖定範圍：選了就帶給後端；沒選（空字串）就不帶，維持後端自動辨識
+  const lockCompany = $("chatCompany").value;
+  const lockPeriod = $("chatPeriod").value;
+  const scopeTag = lockCompany
+    ? `<span class="scope-chip">🔒 ${escapeHtml(lockCompany)}${lockPeriod ? " · " + escapeHtml(lockPeriod) : ""}</span>`
+    : "";
+
+  appendMsg("me", scopeTag + escapeHtml(q));
   const thinking = appendMsg("bot thinking", "AI 查詢中…");
 
   try {
-    // 不再帶公司／期間——後端會從問題文字自動辨識
+    // 有鎖定範圍就帶公司／期間；否則交給後端從問題文字自動辨識
+    const body = { question: q, use_eap: $("chatEap").checked };
+    if (lockCompany) body.company = lockCompany;
+    if (lockPeriod) body.period = lockPeriod;
     const r = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: q, use_eap: $("chatEap").checked }),
+      body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
     const d = await r.json();
@@ -689,6 +761,22 @@ function renderAnswer(d) {
     const chg = cr.change != null && cr.change !== ""
       ? `　·　較上期 <strong>${cr.change > 0 ? "+" : ""}${cr.change}%</strong>` : "";
     html += `<div class="calc-verify">✓ 公式驗證：${escapeHtml(cr.metric)} = <strong>${escapeHtml(String(cr.value))}</strong>${chg}</div>`;
+  }
+
+  // 交叉驗證：EAP 的數字若和本地知識庫差太多，標紅提醒（不斷言誰對，只提示對不上）
+  if (d.cross_check && d.cross_check.length) {
+    const attr = (s) => escapeHtml(String(s)).replace(/"/g, "&quot;");
+    const rows = d.cross_check.map((g) =>
+      `<li><strong>${escapeHtml(g.company)}</strong> ${escapeHtml(g.metric)}（${escapeHtml(g.period)}）：
+        EAP <b class="xc-eap">${escapeHtml(String(g.eap_value))}</b>
+        vs 本地知識庫 <b class="xc-local">${escapeHtml(String(g.local_value))}</b>
+        <button class="xc-reask" data-company="${attr(g.company)}" data-period="${attr(g.period)}" data-metric="${attr(g.metric)}">↻ 改用本地知識庫重問</button></li>`
+    ).join("");
+    html += `<div class="cross-warn">
+      <div class="cross-warn-head">⚠ 與本地知識庫數字不一致，請留意</div>
+      <ul>${rows}</ul>
+      <div class="cross-warn-foot">本地數字由 Graph RAG 直接讀簡報解析而得；EAP 為外部平台回答。兩者對不上時，建議以本地知識庫為準或人工複核。</div>
+    </div>`;
   }
 
   // 決定要不要畫圖：Gemini 給趨勢（折線）；EAP 指令若點名指標→各期直條圖，否則→關鍵比率橫條圖
