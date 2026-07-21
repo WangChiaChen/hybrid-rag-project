@@ -4,6 +4,10 @@
 import streamlit as st
 import io
 import os
+import re
+
+# 「純季度」的期間，用來排除只有資產負債表的「2026Q1財報」，不讓它當預設
+_QUARTER_ONLY = re.compile(r"^\d{4}Q[1-4]$")
 
 # 部署到 Streamlit Cloud 時，金鑰是放在雲端的 Secrets 設定裡（不是 .env 檔），
 # 這裡把它接進 os.environ，這樣其他模組（agent_router.py 等）原本讀 .env 的
@@ -112,9 +116,18 @@ with st.sidebar:
         company = st.selectbox("公司", companies)
         from vector_rag import list_periods_from_vector
         periods = sorted(set(list_periods(company)) | list_periods_from_vector(company))
-        this_period = st.selectbox("分析期間（本期）", periods, index=len(periods) - 1 if periods else 0)
+        # 預設不能直接取最後一個：期間是字串排序，「2026Q1財報」排在「2026Q1」後面，
+        # 但財報期只有資產負債表那十幾個科目，法說會的 NIM、手續費淨收益都不在裡面。
+        # 優先挑「純季度」的最後一期，真的只有財報期才退回原本行為。
+        quarters = [p for p in periods if _QUARTER_ONLY.match(p)]
+        default_periods = quarters or periods
+        default_idx = periods.index(default_periods[-1]) if default_periods else 0
+        this_period = st.selectbox("分析期間（本期）", periods, index=default_idx)
         compare_options = ["（不比較）"] + [p for p in periods if p != this_period]
-        last_period_choice = st.selectbox("比較期間（上一期）", compare_options)
+        # 比較期預設也挑前一個純季度，而不是「（不比較）」
+        prev = default_periods[-2] if len(default_periods) >= 2 else None
+        prev_idx = compare_options.index(prev) if prev in compare_options else 0
+        last_period_choice = st.selectbox("比較期間（上一期）", compare_options, index=prev_idx)
         last_period = None if last_period_choice == "（不比較）" else last_period_choice
 
     st.divider()
@@ -278,16 +291,25 @@ with tab_compare:
         st.subheader("🏦 跨機構比較")
         st.caption("對應「外部資訊落差」痛點：把不同銀行的財報數字並排比較")
 
+        def _default_period_idx(periods):
+            """預設挑最新的「純季度」。原本用 selectbox 的預設 index=0，
+            會停在最舊的 2025Q1；若改成最後一個又會落到只有資產負債表的財報期。"""
+            quarters = [p for p in periods if _QUARTER_ONLY.match(p)]
+            use = quarters or periods
+            return periods.index(use[-1]) if use else 0
+
         comp_cols = st.columns(2)
         with comp_cols[0]:
             company_a = st.selectbox("機構 A", all_companies, key="cmp_a")
             periods_a = list_periods(company_a)
-            period_a = st.selectbox("期間 A", periods_a, key="cmp_pa")
+            period_a = st.selectbox("期間 A", periods_a, key="cmp_pa",
+                                    index=_default_period_idx(periods_a))
         with comp_cols[1]:
             other_companies = [c for c in all_companies if c != company_a] or all_companies
             company_b = st.selectbox("機構 B", other_companies, key="cmp_b")
             periods_b = list_periods(company_b)
-            period_b = st.selectbox("期間 B", periods_b, key="cmp_pb")
+            period_b = st.selectbox("期間 B", periods_b, key="cmp_pb",
+                                    index=_default_period_idx(periods_b))
 
         metrics_a = {m["metric"]: m["value"] for m in list_metrics(company_a, period_a)}
         metrics_b = {m["metric"]: m["value"] for m in list_metrics(company_b, period_b)}

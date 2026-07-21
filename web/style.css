@@ -600,6 +600,23 @@ footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height
 }
 .xc-reask:hover { background: var(--primary-2); }
 
+/* EAP 查無資料、但本地有料時的退路提示。
+   刻意用藍色而非紅色：這不是錯誤，只是兩邊知識庫收錄範圍不同，語氣要中性。 */
+.local-hint {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #1B3A57;
+  background: #EDF3FA;
+  border: 1px solid #C6D8EC;
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.local-hint-head { font-weight: 700; margin-bottom: 6px; }
+.local-hint-src { margin: 0 0 8px; line-height: 1.6; }
+.local-hint .xc-reask { margin-left: 0; }
+.local-hint-foot { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
 /* 答案裡的趨勢圖 */
 .bot-chart {
   margin-top: 12px;

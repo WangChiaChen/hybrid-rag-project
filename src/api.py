@@ -33,10 +33,10 @@ from graph_rag import (
     list_metrics,
     list_periods,
 )
-from metric_alignment import classify_metric, is_cross_comparable
+from metric_alignment import classify_metric, is_cross_comparable, norm_metric_name
 from report_generator import generate_report
 from standard_metrics import STANDARD_METRICS, _pick, align_standard, key_ratios
-from vector_rag import get_all_sources
+from vector_rag import get_all_sources, query_vector_rag
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -58,15 +58,8 @@ app.add_middleware(
 TYPE_LABEL = {"ratio": "比率", "per_share": "每股", "amount": "金額"}
 
 
-# 指標名稱裡的期別標籤（3M26、1Q26、FY24、2025年…），拿掉後同一指標的不同期別會歸為同一個
-_NAME_PERIOD_TAG = re.compile(r"\(?\s*(?:\d[QH]\d{2}|\d+M\d{2}|FY\d{2}|20\d{2}年?|1[01]\d年)\s*\)?")
-
-
-def _norm_metric_name(name: str) -> str:
-    """把「2025年合併稅後淨利」「3M26合併稅後淨利」正規化成同一個「合併稅後淨利」。
-    注意只拿掉期別標籤，不動「第一季」這種字——中信「中信銀行稅後淨利(百萬元)」與
-    「中信銀行第一季稅後淨利(億元)」是同一筆金額的不同單位，合併會套錯單位。"""
-    return _NAME_PERIOD_TAG.sub("", str(name)).strip(" -－()（）")
+# 正規化搬到 metric_alignment（graph_rag 判累計時也要用，放這裡會循環 import）
+_norm_metric_name = norm_metric_name
 
 
 def _unit_map_norm(company: str) -> dict:
@@ -81,6 +74,25 @@ def _unit_map_norm(company: str) -> dict:
     return {k: c.most_common(1)[0][0] for k, c in acc.items()}
 
 
+def _prefix_unit(norm: str, umap_norm: dict) -> Optional[str]:
+    """同一筆數字在不同期的名稱可能多了描述性後綴：中信 2025Q4 叫「中信金單一 4Q25」、
+    2026Q1 卻叫「中信金單一 1Q26 稅後淨利」。去掉期別後仍差一截，等值比對配不起來，
+    所以再退一步用「前綴」找：拿最長的、且本身夠具體（≥4 字）的前綴來補。
+
+    防呆：只有「同一種指標型別」才採用。否則「稅後淨利」（金額）會被「稅後淨利成長」
+    （%）配上，補出來的單位是錯的——那比留空更糟。
+    """
+    if len(norm) < 5:
+        return None
+    kind = classify_metric(norm)
+    best = None
+    for key, unit in umap_norm.items():
+        if len(key) >= 4 and key != norm and norm.startswith(key) and classify_metric(key) == kind:
+            if best is None or len(key) > len(best[0]):
+                best = (key, unit)
+    return best[1] if best else None
+
+
 def _fill_unit(name: str, raw_unit, umap: dict, umap_norm: Optional[dict] = None):
     """補單位。來源簡報常漏標（中信有 37% 的指標沒單位），沒單位的數字無從解讀。
     順序：本期有標就用 → 同公司其他期間標過的 → 依指標型別推定（比率→%、每股→元）。
@@ -92,8 +104,12 @@ def _fill_unit(name: str, raw_unit, umap: dict, umap_norm: Optional[dict] = None
     u = umap.get(name)
     if u:
         return u, True
+    norm = _norm_metric_name(name)
     if umap_norm:
-        u = umap_norm.get(_norm_metric_name(name))
+        u = umap_norm.get(norm)
+        if u:
+            return u, True
+        u = _prefix_unit(norm, umap_norm)
         if u:
             return u, True
     kind = classify_metric(name)
@@ -384,7 +400,21 @@ def _infer_period(question: str, company: Optional[str]) -> Optional[str]:
         for cand in (f"{year}Q{q}", f"{year}Q{q}財報"):
             if cand in ps:
                 return cand
-    return ps[-1] if ps else None
+    return _default_period(ps)
+
+
+def _default_period(ps: list) -> Optional[str]:
+    """沒指定期間時該用哪一期。
+
+    不能直接取 ps[-1]：期間是字串排序，「2026Q1財報」排在「2026Q1」後面，
+    但財報期只有資產負債表那十幾個科目，法說會簡報的 NIM、手續費淨收益都不在裡面。
+    直接拿它當預設，會讓儀表板一開啟只剩十幾張卡片、問答也查不到多數指標。
+    所以優先挑「純季度」那一期；真的只有財報期才退回去用它。
+    """
+    if not ps:
+        return None
+    quarters = [p for p in ps if _PERIOD_RE.match(p)]
+    return quarters[-1] if quarters else ps[-1]
 
 
 _CHART_FENCE = re.compile(r"```chart\s*(.*?)```", re.S)
@@ -711,6 +741,120 @@ def _metric_aliases(text):
     return sorted(aliases)
 
 
+# EAP 回「查不到」時的常見說法。實測它的措辭會變（「查詢不到」「無法取得」「未能查詢到」），
+# 所以比對關鍵動詞而不是整句。
+# EAP 同一種情況每次的說法都不一樣，實測就見過「查詢不到」「查無」「無法取得」
+# 「未能查詢到」「未查詢到」「並沒有…內容」，而且「資料／資訊」也會互換。
+# 逐句列舉追不完，所以拆成「動詞骨架」寫，把可省略的字設成選配。
+_EAP_NO_DATA = re.compile(
+    r"查無|查詢不到|查不到|找不到|沒有找到|"
+    r"無法(取得|提供|查詢|回答|找到)|"
+    r"未(能)?(查詢|查得|查到|取得|找到|收錄)|"
+    r"尚無|未收錄|無相關(資料|資訊|內容)|"
+    # 「並沒有中信金控 2025 年第三季法說會的逐字稿或問答內容」——中間夾的公司＋期間＋
+    # 文件類型可以很長，窗口要放寬，但仍限制在同一句內（不跨標點）才算。
+    r"(沒有|並無)[^。；\n]{0,40}(資料|資訊|內容|紀錄|逐字稿)"
+)
+
+# 兜底用。上面的骨架仍可能漏掉沒見過的講法，但「查不到」的回覆有兩個穩定特徵：
+# 帶道歉語氣、而且很短（真的查到資料時它會長篇大論還附表格）。
+_EAP_APOLOGY = re.compile(r"抱歉|unfortunately", re.I)
+_EAP_SHORT_ANSWER = 120
+
+
+def _eap_found_nothing(answer) -> bool:
+    """EAP 這次是不是根本沒撈到資料。
+
+    有 markdown 表格就代表它撈到東西了——那種情況即使句子裡出現「部分查不到」，
+    也不算整題落空，不需要跳出退路提示。
+    """
+    text = str(answer).strip()
+    if not text:
+        return True
+    if text.count("|") >= 4:
+        return False
+    if _EAP_NO_DATA.search(text):
+        return True
+    return bool(_EAP_APOLOGY.search(text)) and len(text) <= _EAP_SHORT_ANSWER
+
+
+# 判定「本地真的答得出來」的字面命中門檻。
+# query_vector_rag 一定會回 top-1，不管相不相關——問第一金控「參股泰山保險」它照樣給你一段
+# 完全無關的簡報敘述。按了才發現本地也答不出來，比不給按鈕更糟，所以要求字面上真的對得上。
+#
+# 用「命中比例」而不是命中數量：實測答得出來的題目命中 0.7~1.0，答不出來的只有 0.13~0.21，
+# 分得很開；而比例不受問題長短影響，短問題不會因為 2-gram 本來就少而被誤判成沒料。
+# 另設絕對下限，避免極短問題（兩三個字）湊巧全中就過關。
+_LOCAL_HIT_RATIO = 0.4
+_LOCAL_HIT_MIN = 3
+
+
+def _src_label(meta):
+    page = meta.get("page")
+    return f"{meta.get('source', '本地知識庫')}{f'　{page}' if page else ''}"
+
+
+def _local_context(question, company, period, top_k=3):
+    """本地知識庫對這個問題有沒有料；有的話連段落本文一起回傳。
+
+    只用本地的向量檢索（Chroma ＋ 本地 embedding，不呼叫任何外部 API、不花額度），
+    所以可以在每次 EAP 落空時順手問一下。
+
+    回傳 {"text": 供 LLM 閱讀的段落, "sources": [meta…], "label": 最相關來源} 或 None。
+    """
+    from vector_rag import _keywords, _kw_score
+
+    grams = _keywords(question)
+    if not grams:
+        return None
+
+    for scope in (period, None):   # 先看這一期，再放寬到全公司（逐字稿常掛在別的期間）
+        res = query_vector_rag(question, top_k=top_k, company=company, period=scope)
+        docs = res.get("documents", [[]])[0]
+        metas = res.get("metadatas", [[]])[0]
+        if not docs or not metas:
+            continue
+        hits = _kw_score(docs[0], grams)   # 只用最相關那一段判斷夠不夠格
+        if hits < _LOCAL_HIT_MIN or hits / len(grams) < _LOCAL_HIT_RATIO:
+            continue
+        return {
+            "text": "\n".join(f"[{_src_label(m)}] {d}" for d, m in zip(docs, metas)),
+            "sources": list(metas),
+            "label": _src_label(metas[0]),
+        }
+    return None
+
+
+def _augment_with_local(question, ctx):
+    """把本地 Vector RAG 檢索到的段落交給 EAP，讓它據此作答。
+
+    檢索與生成本來就是兩件事：這裡 Vector RAG 當檢索器、EAP 當生成器，
+    等於用我們自己的資料補上 EAP 知識庫的缺口，而不是繞過平台自己另做一套。
+
+    **一定要開新的聊天室**。EAP 的聊天有對話記憶，而 get_or_create_chat() 是沿用同一間；
+    若把逐字稿注入共用聊天室，之後所有提問都可能從這段記憶作答，畫面上卻標著
+    「EAP 平台回答」——看起來像平台本來就有這筆資料，其實是我們幾題前塞進去的。
+    實測確認過：同一題在舊聊天室答得出來、在新聊天室回「查不到」。
+    開新的一間，這次的答案就確定只來自我們提供的段落。
+
+    刻意寫死「只根據下列內容」：先前實測過，EAP 在沒有範圍限制時會拿一堆不相干的指標
+    硬湊出結論（問參股案，它回台灣人壽 RBC、國泰產險市佔率）。寧可它說資料不足，
+    也不要它自由發揮——真的不足時，外層還有完全走本地的退路。
+
+    回傳補強後的答案；補了還是答不出來就回 None。
+    """
+    from eap_client import ask_question, create_chat
+
+    q = (
+        "以下是我方知識庫的原始內容（來自法說會錄音的語音轉文字結果，皆為真實資料）。\n"
+        "請「只根據下列內容」回答問題：不要引用其他資料、不要臆測；"
+        "若下列內容不足以回答，請直接說明資料不足。\n\n"
+        f"{ctx['text']}\n\n問題：{question}"
+    )
+    aug = ask_question(create_chat(), q)
+    return None if _eap_found_nothing(aug) else str(aug).strip()
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     company = req.company or _infer_company(req.question)
@@ -765,6 +909,29 @@ def chat(req: ChatRequest):
                 resp["cross_check"] = gaps
         except Exception:
             pass  # 交叉驗證只是加值提醒，出錯不能影響主回答
+        # EAP 撈不到、但本地有料時給一條退路。兩邊的知識庫是各自獨立的：
+        # EAP 只有你在它後台上傳的簡報，法說會逐字稿是我們自己 STT 轉的、只存在本地。
+        # 所以「EAP 查不到」很常見的原因是資料根本不在它那邊，而不是問題不好。
+        # EAP 撈不到時，改用「本地檢索 ＋ EAP 生成」再試一次（見 _augment_with_local）。
+        # 兩邊的知識庫是各自獨立的：EAP 只有你在它後台上傳的簡報，法說會逐字稿是我們自己
+        # STT 轉的、只存在本地。所以「EAP 查不到」很常見的原因是資料不在它那邊，不是問題不好。
+        try:
+            if _eap_found_nothing(answer):
+                ctx = _local_context(original, company, period)
+                if ctx:
+                    aug = _augment_with_local(original, ctx)
+                    if aug:
+                        resp["answer"] = aug
+                        resp["route"] = "EAP_RAG"
+                        resp["sources"] = ctx["sources"]
+                    else:
+                        # 連補了資料都答不出來 → 留一條完全走本地的退路
+                        resp["local_fallback"] = {
+                            "question": original, "company": company,
+                            "period": period, "source": ctx["label"],
+                        }
+        except Exception:
+            pass  # 補強只是加值，出錯不能影響 EAP 的主回答
         return resp
 
     result = answer_question(

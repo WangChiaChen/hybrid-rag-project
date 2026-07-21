@@ -42,10 +42,22 @@ function fillSelect(sel, items, selected) {
 }
 const periodsOf = (name) => (COMPANIES.find((c) => c.name === name) || {}).periods || [];
 
+// 預設要選哪兩期。不能直接拿陣列最後兩個：期間是字串排序，「2026Q1財報」排在
+// 「2026Q1」後面，但財報期只有資產負債表那十幾個科目，法說會的 NIM、手續費都不在裡面。
+// 直接當預設會讓一進頁面只剩十幾張卡片，而且兩期指標名稱不重疊、變化率全是空的。
+// 所以預設用「純季度」的最後兩期；真的只有財報期才退回原本的行為。
+const QUARTER_ONLY = /^\d{4}Q[1-4]$/;
+function defaultPeriods(ps) {
+  const qs = ps.filter((p) => QUARTER_ONLY.test(p));
+  const use = qs.length ? qs : ps;
+  return [use[use.length - 1], use[use.length - 2]];
+}
+
 function onCompanyChange() {
   const ps = periodsOf($("company").value);
-  fillSelect($("period"), ps, ps[ps.length - 1]);
-  fillSelect($("lastPeriod"), ["（不比較）", ...ps], ps[ps.length - 2]);
+  const [cur, prev] = defaultPeriods(ps);
+  fillSelect($("period"), ps, cur);
+  fillSelect($("lastPeriod"), ["（不比較）", ...ps], prev);
   load();
 }
 
@@ -310,7 +322,9 @@ function initCompare() {
 
 function syncComparePeriods(side) {
   const ps = periodsOf($("cmp" + side).value);
-  fillSelect($("cmpP" + side), ps, ps[ps.length - 1]);
+  // 同樣避開財報期：兩邊都預設財報期的話，能對齊的只剩「資產負債率」一列，
+  // ROE／NIM／逾放比這些真正該比的都在法說會簡報那一期。
+  fillSelect($("cmpP" + side), ps, defaultPeriods(ps)[0]);
 }
 
 async function loadCompare() {
@@ -564,6 +578,9 @@ const ROUTE_BADGE = {
   NARRATIVE: ["語意檢索 · Vector RAG", "b-narr"],
   BOTH: ["雙引擎 · Hybrid RAG", "b-both"],
   EAP: ["EAP 平台回答", "b-both"],
+  // EAP 自己查不到，改由本地 Vector RAG 檢索、再交給 EAP 生成的答案。
+  // 標成不同顏色，讓人一眼看出這題的資料是我們補的，不是平台原本就有的。
+  EAP_RAG: ["EAP 平台回答 · 資料由 Vector RAG 提供", "b-narr"],
 };
 
 const SCOPE_NONE = "（不指定）";   // 「不選」選項：值為空字串，代表交給後端自動辨識
@@ -589,16 +606,18 @@ function initChat() {
   $("chat-q").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
   $("export-report").onclick = exportReport;
 
-  // 紅框裡「改用本地知識庫重問」按鈕：用事件委派接（訊息是動態生成的）
+  // 「改用本地知識庫」按鈕：用事件委派接（訊息是動態生成的）。
+  // 兩個地方會用到——紅框的交叉驗證不一致，以及 EAP 查無資料時的退路。
   $("chat-log").addEventListener("click", (e) => {
     const btn = e.target.closest(".xc-reask");
-    if (btn) askLocal(btn.dataset.company, btn.dataset.period, btn.dataset.metric);
+    if (btn) askLocal(btn.dataset.company, btn.dataset.period, btn.dataset.question);
   });
 }
 
-// 關掉 EAP、鎖定該公司／期間，用本地 Hybrid RAG（Graph RAG）重問這個指標，
-// 直接拿到系統以公式驗證的正確數字，不再受 EAP 影響。
-function askLocal(company, period, metric) {
+// 關掉 EAP、鎖定該公司／期間，改用本地 Hybrid RAG 重問。
+// 交叉驗證那條路傳進來的是「指標名稱」（拿系統公式驗證過的數字），
+// EAP 查無資料那條路傳進來的是「使用者原本的問題」（本地的逐字稿答得出來）。
+function askLocal(company, period, question) {
   const comp = $("chatCompany");
   if ([...comp.options].some((o) => o.value === company)) {
     comp.value = company;
@@ -607,7 +626,7 @@ function askLocal(company, period, metric) {
   const per = $("chatPeriod");
   if ([...per.options].some((o) => o.value === period)) per.value = period;
   $("chatEap").checked = false;      // 走本地，不走 EAP
-  $("chat-q").value = metric;
+  $("chat-q").value = question;
   sendChat();
 }
 
@@ -770,12 +789,36 @@ function renderAnswer(d) {
       `<li><strong>${escapeHtml(g.company)}</strong> ${escapeHtml(g.metric)}（${escapeHtml(g.period)}）：
         EAP <b class="xc-eap">${escapeHtml(String(g.eap_value))}</b>
         vs 本地知識庫 <b class="xc-local">${escapeHtml(String(g.local_value))}</b>
-        <button class="xc-reask" data-company="${attr(g.company)}" data-period="${attr(g.period)}" data-metric="${attr(g.metric)}">↻ 改用本地知識庫重問</button></li>`
+        <button class="xc-reask" data-company="${attr(g.company)}" data-period="${attr(g.period)}" data-question="${attr(g.metric)}">↻ 改用本地知識庫重問</button></li>`
     ).join("");
     html += `<div class="cross-warn">
       <div class="cross-warn-head">⚠ 與本地知識庫數字不一致，請留意</div>
       <ul>${rows}</ul>
       <div class="cross-warn-foot">本地數字由 Graph RAG 直接讀簡報解析而得；EAP 為外部平台回答。兩者對不上時，建議以本地知識庫為準或人工複核。</div>
+    </div>`;
+  }
+
+  // 這題 EAP 原本查不到，是我們補了本地資料它才答得出來——講清楚，不要讓人以為平台本來就有。
+  if (d.route === "EAP_RAG") {
+    html += `<div class="local-hint">
+      <div class="local-hint-head">EAP 平台原本查無此資料</div>
+      <p class="local-hint-src">上方答案由 EAP 生成，但依據的是<strong>本系統提供的法說會逐字稿</strong>（來源見下方）。</p>
+      <div class="local-hint-foot">EAP 收錄的是後台上傳的簡報；逐字稿由本系統將錄音經 STT 轉寫後索引，只存在本地。</div>
+    </div>`;
+  }
+
+  // EAP 查無資料，但本地知識庫有料 —— 給一條退路。
+  // 兩邊的知識庫是各自獨立的：EAP 只有後台上傳的簡報，法說會逐字稿是我們自己 STT 轉的，
+  // 所以「EAP 查不到」多半代表資料不在它那邊，而不是問題問得不好。
+  if (d.local_fallback) {
+    const f = d.local_fallback;
+    const attr = (s) => escapeHtml(String(s)).replace(/"/g, "&quot;");
+    html += `<div class="local-hint">
+      <div class="local-hint-head">EAP 平台沒有這筆資料，但本地知識庫有</div>
+      <p class="local-hint-src">找到相關內容：<strong>${escapeHtml(f.source)}</strong></p>
+      <button class="xc-reask" data-company="${attr(f.company || "")}"
+        data-period="${attr(f.period || "")}" data-question="${attr(f.question)}">↻ 改用本地知識庫回答</button>
+      <div class="local-hint-foot">EAP 收錄的是後台上傳的簡報；法說會逐字稿由本系統將錄音經 STT 轉寫後索引，只存在本地。</div>
     </div>`;
   }
 

@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>有你蒸好 · 財報分析</title>
-<link rel="stylesheet" href="/style.css">
+<!-- ?v= 是版本參數：改完前端要記得 +1。沒有它的話瀏覽器會拿快取裡的舊 app.js，
+     重新部署後打開仍是舊畫面（改完 Ctrl+F5 才看得到），現場展示很容易踩到。 -->
+<link rel="stylesheet" href="/style.css?v=5">
 <!-- Plotly 走 CDN：不用 npm、不用打包，改完存檔重整就看得到 -->
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
@@ -154,7 +156,10 @@
         <span class="switch-track"><span class="switch-knob"></span></span>
         <span class="switch-label">改用 EAP 平台回答</span>
       </label>
-      <span class="eap-hint">預設走 Gemini ＋ 你的 Hybrid RAG；勾選則改由 EAP 平台回答</span>
+      <!-- 這段要跟 api.py 的行為一致：勾選後不是「純 EAP」，EAP 查不到時會用本地
+           Vector RAG 檢索、再交給 EAP 生成（答案上會標示資料來源） -->
+      <span class="eap-hint">預設走 Gemini ＋ 你的 Hybrid RAG；勾選改由 EAP 平台回答，
+        平台查無資料時自動用本地 Vector RAG 檢索補上</span>
       <button id="export-report" class="btn-ghost" title="依最後一則問答的公司／期間匯出 Word 報告">⬇ 匯出 Word 報告</button>
     </div>
 
@@ -223,6 +228,6 @@
   </footer>
 </main>
 
-<script src="/app.js"></script>
+<script src="/app.js?v=5"></script>
 </body>
 </html>
