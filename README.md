@@ -110,12 +110,34 @@ python report_generator.py
 
 ## 第六步：打開網頁介面，實際跟它聊天
 
+有兩個介面，**平常用第一個就好**，第二個是早期版本、留著當備援。
+
+### 主要介面：FastAPI ＋ 網頁前端（展示時用這個）
+
 回到最外層資料夾（打 `cd ..` 回上一層），執行：
+
+**Windows：**
+```powershell
+venv\Scripts\python.exe -m uvicorn api:app --app-dir src --reload --port 8000
+```
+
+**Mac / Linux：**
+```bash
+venv/bin/python -m uvicorn api:app --app-dir src --reload --port 8000
+```
+
+然後打開瀏覽器到 `http://localhost:8000`。四個分頁分別是：分析儀表板、跨機構比較、問答與報告、資料來源總覽。
+API 文件在 `http://localhost:8000/docs`（FastAPI 自動產生的，可以直接在上面試打每個 endpoint）。
+
+前端是手寫的 HTML/CSS/JS（放在 `web/`），沒有打包步驟，改完存檔重新整理就看得到。
+如果改了畫面卻沒變化，那是瀏覽器快取，把 `web/index.html` 裡 `app.js?v=2` 的數字 +1 就會強制更新。
+
+### 備援介面：Streamlit
+
 ```bash
 streamlit run src/app.py
 ```
-
-它會自動幫你開一個瀏覽器分頁，網址通常是 `http://localhost:8501`，這就是你可以現場展示的聊天介面。
+會自動開瀏覽器到 `http://localhost:8501`。功能比較陽春，但不用管前端檔案。
 
 ## 這個資料夾裡面各個檔案在幹嘛
 
@@ -124,22 +146,51 @@ hybrid-rag-project/
 ├── src/
 │   ├── preprocess_pdf.py    → 把 PDF 拆成一張張圖片
 │   ├── vlm_parse.py         → 讓 AI 讀懂圖片裡的圖表和數字
+│   ├── stt_parse.py         → 把法說會錄音轉成逐字稿
+│   ├── ingest.py            → 把解析結果匯入知識庫（重匯同一期會先清舊的）
 │   ├── vector_rag.py        → 負責「找出相關的文字說明」
 │   ├── graph_rag.py         → 負責「精準計算數字變化」
+│   ├── metric_alignment.py  → 判斷指標是比率還是金額、是不是累計值
+│   ├── standard_metrics.py  → 各家用詞不同的 ROE/NIM… 對齊到同一個定義
 │   ├── agent_router.py      → 負責「判斷問題該用哪個方法回答」
+│   ├── eap_client.py        → 串接 EAP 平台的聊天 API
+│   ├── backfill_units.py    → 維護用：把單位從解析結果回填／校正到圖譜
 │   ├── report_generator.py  → 把結果整理成 Word 報告
-│   └── app.py                → 網頁聊天介面
+│   ├── api.py               → FastAPI 後端（主要介面）
+│   └── app.py               → Streamlit 介面（備援）
+├── web/          → 手寫的前端 HTML/CSS/JS，由 api.py 直接提供
 ├── pages/        → PDF 拆出來的圖片會自動存在這裡
-├── vector_db/    → 資料庫檔案，不用管它
-├── outputs/      → 產生出來的報告和結果會放這裡
+├── vector_db/    → 知識庫（ChromaDB ＋ 知識圖譜 JSON），有進版控，見下方說明
+├── outputs/      → 解析結果 JSON、逐字稿、產生的報告
 ├── requirements.txt   → 記錄這個專案需要裝哪些套件
+├── render.yaml        → Render 一鍵部署設定
 ├── .env.example       → 金鑰範例檔（記得複製成 .env 再填金鑰）
 └── .gitignore         → 告訴 Git 哪些檔案不用管，新手可以先忽略這個
 ```
 
-## 之後要換成比賽方提供的 EAP 平台
+### 關於 `vector_db/` 為什麼進版控
 
-現在專案裡用的是一般市面上找得到的工具先讓你看懂邏輯怎麼跑。等你拿到 EAP 平台的技術文件之後，去每支檔案裡搜尋 `TODO`，那些地方就是需要換成 EAP 提供的功能的地方，其他邏輯都不用改。
+一般來說資料庫不該進 Git，但這裡是刻意的：雲端部署（Streamlit Cloud / Render）只會從 repo 拉檔案，
+知識庫不在裡面的話，部署出去的網站就是空的，而使用者也沒辦法自己重跑一次 VLM 解析。
+整個只有 2 MB 出頭，而且這是 demo 專案不是正式系統，值得這個取捨。
+**`.env`（你的金鑰）有被 `.gitignore` 擋住，不會上傳。**
+
+## EAP 平台
+
+EAP 已經串好了（`src/eap_client.py`，用的是官方的聊天 API）。在「問答與報告」那一頁把
+「改用 EAP 平台回答」打開，問題就會送到 EAP 而不是 Gemini。要用的話得在 `.env` 補三個值：
+
+```
+EAP_API_BASE_URL=https://cloud.geminidata.com/api/portal/api10
+EAP_PROJECT_ID=（專案 ID，在專案網址列找得到）
+EAP_API_KEY=（後台「管理專案」→「通證管理」→「新增通證」取得）
+```
+
+EAP 的資料是在它後台網頁手動上傳的，我們的程式碰不到它的知識庫。想確認平台上到底有沒有某家公司的資料，
+跑 `venv/Scripts/python.exe src/check_eap_data.py`，它會直接問平台本人（只讀不寫）。
+
+EAP 是外部平台，它的數字我們無法保證正確，所以答案回來後會跟本地知識庫做**交叉驗證**：
+兩邊的標準指標（EPS／ROE／ROA…）差超過 5% 就在畫面上標出來提醒，不斷言誰對誰錯。
 
 ## 卡住的時候，先看這裡
 
@@ -150,12 +201,29 @@ hybrid-rag-project/
 先看終端機最前面有沒有 `(venv)` 這幾個字，沒有的話代表虛擬環境沒有啟動，回到第二步重新執行 `source venv/bin/activate`（Windows 是 `venv\Scripts\activate`）。
 
 **跟資料庫（ChromaDB）有關的報錯**
-通常是資料夾權限問題，把 `vector_db` 這個資料夾整個刪掉，重新跑一次程式，它會自動重建。
+通常是資料夾權限問題。注意：`vector_db` 現在裝著整個知識庫，**不要整個刪掉**（刪了就要重跑所有 PDF 的 VLM 解析，很花時間也花額度）。
+先試著把 `vector_db/` 以外的東西排除，真的要重建的話，記得 `git checkout vector_db` 可以還原成版控裡的版本。
+
+**改了前端，畫面卻沒變**
+瀏覽器快取。把 `web/index.html` 裡 `style.css?v=2` 和 `app.js?v=2` 的數字 +1，或按 Ctrl+F5 強制重新整理。
 
 **完全不知道錯誤訊息在講什麼**
 直接把錯誤訊息整段複製貼給我，我幫你看。
 
-## 部署到 Streamlit Community Cloud（讓別人也能用網址連進來）
+## 維護：知識庫的單位怎麼補
+
+`src/backfill_units.py` 是維護腳本，它會拿 `outputs/parsed_*.json`（VLM 的原始解析結果）跟知識圖譜對帳，
+補上漏掉的單位、校正換算錯的單位。只會動 `unit` 這個欄位，不新增不刪除不改數值，所以重跑很安全。
+
+```bash
+venv/Scripts/python.exe src/backfill_units.py            # 先看它想改什麼（不寫入）
+venv/Scripts/python.exe src/backfill_units.py --apply    # 確認沒問題再實際執行
+```
+
+它刻意保守：只有「數值也對得上」才套用單位（同一份簡報常在不同頁重複用同一個指標名稱、單位卻不同），
+而且只自動修「確定是程式換算錯」的那些；兩份解析講法不同的會列出來讓你自己判斷，不擅自改。
+
+## 部署（讓別人也能用網址連進來）
 
 ### 第一步：把專案放到 GitHub
 1. 去 https://github.com 註冊帳號（如果還沒有）
@@ -169,19 +237,31 @@ git branch -M main
 git remote add origin 你的repo網址
 git push -u origin main
 ```
-`.env` 跟 `vector_db` 這些檔案因為 `.gitignore` 已經設定好，不會被上傳，金鑰不會外洩。
+`.env`（你的金鑰）因為 `.gitignore` 已經設定好，不會被上傳。
+`vector_db/` 則是**刻意上傳**的——雲端只會從 repo 拉檔案，知識庫不跟著上去的話部署出來會是空的。
 
-### 第二步：連接 Streamlit Cloud
+### 第二步之 A：部署到 Render（推薦，跑的是主要介面）
+專案裡已經有 `render.yaml`，所以不用手動設定：
+1. 打開 https://render.com，用 GitHub 帳號登入
+2. New → **Blueprint**，選你剛剛建立的 repository，它會自動讀 `render.yaml`
+3. 它會問你四個環境變數的值，填進去（這些不進版控）：
+   `GEMINI_API_KEY`、`EAP_API_BASE_URL`、`EAP_PROJECT_ID`、`EAP_API_KEY`
+   ——只用 Gemini 不用 EAP 的話，後三個可以留空
+4. 按下部署，等它裝完套件啟動
+
+### 第二步之 B：部署到 Streamlit Community Cloud（跑的是備援介面）
 1. 打開 https://share.streamlit.io，用 GitHub 帳號登入
-2. 點 "New app"，選擇你剛剛建立的 repository
+2. 點 "New app"，選擇你的 repository
 3. Main file path 填：`src/app.py`
 4. 點 "Advanced settings" 展開，在 "Secrets" 欄位貼上（格式是 TOML）：
 ```toml
 GEMINI_API_KEY = "你的金鑰"
 ```
-5. 點 "Deploy"，等個幾分鐘它會自動安裝 `requirements.txt` 裡的套件並啟動
+5. 點 "Deploy"
 
 ### 部署後要注意的事
-- **資料不會永久保存**：雲端環境重啟或你更新程式碼時，之前上傳的資料會被清空，要重新用網頁上的「上傳新資料」功能匯入一次
-- **額度是共用的**：所有連進這個網址的人都共用同一組 Gemini 免費額度，人多的時候容易撞到「每分鐘/每天」的限制
-- 更新程式碼後，把新的變動 `git push` 上去，Streamlit Cloud 會自動重新部署
+- **後來上傳的資料不會永久保存**：雲端重啟或你更新程式碼時，容器會回到 repo 裡的狀態。
+  跟著 repo 一起上去的知識庫還在，但你在網站上「上傳新資料」匯入的東西會不見。
+  要永久保留的話，得在本機匯入後把 `vector_db/` 一起 commit 上去。
+- **額度是共用的**：所有連進這個網址的人都共用同一組 Gemini 免費額度，人多的時候容易撞到「每分鐘／每天」的限制
+- 更新程式碼後 `git push`，兩個平台都會自動重新部署
