@@ -11,7 +11,10 @@
         "--app-dir",
         "src",
         "--port",
-        "8000"
+        "8000",
+        "--reload",
+        "--reload-dir",
+        "src"
       ],
       "port": 8000
     },
