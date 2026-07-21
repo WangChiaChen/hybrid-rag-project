@@ -11,7 +11,11 @@ outputs/*.json
 uploads_temp/
 .DS_Store
 downloads/
-graph_import.csv
+
+# 匯出的產生物，都能用腳本重跑出來，不進版控（進了反而容易拿到過期的版本）
+graph_import.csv            # export_graph_csv.py --format flat
+eap_graph_precise.csv       # export_graph_csv.py（給 EAP New Flow 匯入）
+outputs/transcript_*.pdf    # transcript_to_pdf.py（給 EAP Upload file 用），來源 .txt 有進版控
 
 # Claude Code 本機工具設定（非共用）
 .claude/settings.local.json
