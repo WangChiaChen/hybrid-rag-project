@@ -108,10 +108,16 @@ def list_periods_from_vector(company):
 
 
 if __name__ == "__main__":
-    index_narrative(
-        "test_1",
-        "手續費淨收益因財富管理業務放緩而季減 4.8%，主要受市場波動影響客戶投資意願下降。",
-        {"source": "測試資料", "page": 1}
-    )
-    result = query_vector_rag("為什麼手續費收入下滑？")
-    print(result["documents"])
+    # 這支自我測試寫的是「正式」的知識庫（同一個 vector_db），測試段落留著會被真的檢索到，
+    # 而且內容是編的——曾經就有一筆「季減 4.8%」的假敘述躺在庫裡。跑完一定要刪掉。
+    try:
+        index_narrative(
+            "test_1",
+            "手續費淨收益因財富管理業務放緩而季減 4.8%，主要受市場波動影響客戶投資意願下降。",
+            {"source": "測試資料", "page": 1}
+        )
+        result = query_vector_rag("為什麼手續費收入下滑？")
+        print(result["documents"])
+    finally:
+        collection.delete(ids=["test_1"])
+        print("（已清掉測試段落，知識庫維持乾淨）")
