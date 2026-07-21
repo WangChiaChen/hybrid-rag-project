@@ -12,10 +12,14 @@ uploads_temp/
 .DS_Store
 downloads/
 
-# 匯出的產生物，都能用腳本重跑出來，不進版控（進了反而容易拿到過期的版本）
-graph_import.csv            # export_graph_csv.py --format flat
-eap_graph_precise.csv       # export_graph_csv.py（給 EAP New Flow 匯入）
-outputs/transcript_*.pdf    # transcript_to_pdf.py（給 EAP Upload file 用），來源 .txt 有進版控
+# 匯出的產生物，都能用腳本重跑出來，不進版控（進了反而容易拿到過期的版本）。
+# 注意：gitignore 只認「整行開頭的 #」，寫成行尾註解會被當成 pattern 的一部分而失效。
+# export_graph_csv.py --format flat
+graph_import.csv
+# export_graph_csv.py（給 EAP 的 New Flow 匯入）
+eap_graph_precise.csv
+# transcript_to_pdf.py（給 EAP 的 Upload file 用），來源 .txt 有進版控
+outputs/transcript_*.pdf
 
 # Claude Code 本機工具設定（非共用）
 .claude/settings.local.json
