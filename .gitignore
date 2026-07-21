@@ -18,3 +18,4 @@ graph_import.csv
 
 # Office 暫存／鎖定檔
 ~$*
+*.bak.pptx
