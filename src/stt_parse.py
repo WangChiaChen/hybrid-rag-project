@@ -167,9 +167,13 @@ def run_stt_and_ingest(audio_path, company, period):
     """整合函式：錄音 -> 逐字稿 -> 切段寫入 Vector RAG，可被 app.py 呼叫"""
     transcript = transcribe_audio(audio_path)
 
+    from paths import safe_component
+
     out_dir = os.path.join(BASE_DIR, "outputs")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"transcript_{company}_{period}.txt")
+    # company／period 來自使用者輸入，清理過才能拿去組檔名
+    out_path = os.path.join(
+        out_dir, f"transcript_{safe_component(company)}_{safe_component(period)}.txt")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(transcript)
 

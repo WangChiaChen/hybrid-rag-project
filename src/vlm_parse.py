@@ -100,8 +100,11 @@ def run_vlm_parse(pdf_path, company, period, max_pages=10, progress_callback=Non
     回傳 (解析結果 list, 存檔路徑)
     """
     from preprocess_pdf import pdf_to_images
+    from paths import safe_component
 
-    output_dir = os.path.join(BASE_DIR, "pages", f"{company}_{period}")
+    # company／period 來自使用者輸入，直接拿去組路徑會被「../..」寫到專案目錄外
+    slug = f"{safe_component(company)}_{safe_component(period)}"
+    output_dir = os.path.join(BASE_DIR, "pages", slug)
     pages = pdf_to_images(pdf_path, output_dir=output_dir, max_pages=max_pages)
     pages_to_process = pages[:max_pages]
 
@@ -116,7 +119,7 @@ def run_vlm_parse(pdf_path, company, period, max_pages=10, progress_callback=Non
 
     out_dir = os.path.join(BASE_DIR, "outputs")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"parsed_{company}_{period}.json")
+    out_path = os.path.join(out_dir, f"parsed_{slug}.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
 

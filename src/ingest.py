@@ -45,7 +45,10 @@ def run_ingest(company, period, parsed_json_path=None, pages=None, replace=None)
     先清再匯的話會把原本好好的資料清掉卻換不到新的。
     """
     if parsed_json_path is None:
-        parsed_json_path = os.path.join(BASE_DIR, "outputs", f"parsed_{company}_{period}.json")
+        from paths import safe_component
+        parsed_json_path = os.path.join(
+            BASE_DIR, "outputs",
+            f"parsed_{safe_component(company)}_{safe_component(period)}.json")
 
     if not os.path.exists(parsed_json_path):
         print(f"找不到 {parsed_json_path}，請先執行：python src/vlm_parse.py --company {company} --period {period}")

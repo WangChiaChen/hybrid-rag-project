@@ -6,6 +6,8 @@ import networkx as nx
 import json
 import os
 import re
+import tempfile
+import threading
 
 from metric_alignment import classify_metric, is_cumulative_name, norm_metric_name
 
@@ -31,6 +33,9 @@ G = _load_graph()
 _CUM_SELF_CACHE: dict = {}
 _METRICS_BY_COMPANY: dict = {}
 
+# 保護寫檔與序列化。上傳是背景執行緒，兩人同時上傳就會同時走到 save_graph()。
+_SAVE_LOCK = threading.RLock()
+
 
 def _invalidate_caches():
     _CUM_SELF_CACHE.clear()
@@ -38,11 +43,33 @@ def _invalidate_caches():
 
 
 def save_graph():
-    _invalidate_caches()
-    os.makedirs(os.path.dirname(GRAPH_FILE), exist_ok=True)
-    data = {"nodes": [{"id": n, **d} for n, d in G.nodes(data=True)]}
-    with open(GRAPH_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """把圖譜寫回磁碟。
+
+    寫暫存檔再 os.replace 原子性替換，而不是直接覆寫原檔：
+    整份知識庫就這一個 JSON，寫到一半當掉（或同時有兩個上傳在寫）會直接毀掉它，
+    而那是整個系統唯一的結構化資料來源。os.replace 在同一個檔案系統上是原子操作，
+    要嘛看到舊的完整檔、要嘛看到新的完整檔，不會有半份。
+
+    加鎖是因為上傳走的是背景執行緒（見 api._run_upload_job），
+    兩個人同時上傳就會有兩個執行緒同時走到這裡。
+    """
+    with _SAVE_LOCK:
+        _invalidate_caches()
+        os.makedirs(os.path.dirname(GRAPH_FILE), exist_ok=True)
+        # 序列化也要在鎖裡：邊走訪 G.nodes 邊被另一個執行緒新增節點會直接拋 RuntimeError
+        data = {"nodes": [{"id": n, **d} for n, d in G.nodes(data=True)]}
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(GRAPH_FILE) or ".", prefix=".graph_", suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())     # 確保內容真的落盤才替換
+            os.replace(tmp_path, GRAPH_FILE)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
 
 
 # 只寫幣別、看不出量級的寫法。單獨出現時無從得知是元、千元還是百萬元。
@@ -96,7 +123,12 @@ def normalize_unit(unit, metric=None):
     return u
 
 
-def add_metric_datapoint(company, metric, period, value, unit=None, yoy=None):
+def add_metric_datapoint(company, metric, period, value, unit=None, yoy=None, save=True):
+    """新增一筆指標。
+
+    save=False 用於批次匯入：一份簡報動輒 80 筆指標，每筆都存一次就要把整份
+    2MB 的 JSON 重寫 80 遍（加上原子寫入的 fsync 更慢）。批次結束再存一次即可。
+    """
     node_id = f"{company}|{metric}|{period}"
     attrs = {"company": company, "metric": metric, "period": period, "value": value}
     # 單位是跨公司比較的關鍵（同樣是「稅後淨利」，財報用千元、簡報用億元，不能直接比大小）
@@ -105,8 +137,10 @@ def add_metric_datapoint(company, metric, period, value, unit=None, yoy=None):
         attrs["unit"] = unit
     if yoy:
         attrs["yoy"] = yoy
-    G.add_node(node_id, **attrs)
-    save_graph()
+    with _SAVE_LOCK:
+        G.add_node(node_id, **attrs)
+    if save:
+        save_graph()
     return node_id
 
 
@@ -130,15 +164,21 @@ def ingest_metrics(company, period, key_metrics):
     """key_metrics 是 vlm_parse.py 解析出來的 list，例如：
     [{"指標名稱": "手續費淨收益", "數值": "8054", "單位": "千元", "YoY": "12%"}]
     """
+    added = False
     for m in key_metrics:
         name = m.get("指標名稱")
         value = m.get("數值")
         if name and value:
+            # save=False：整批加完才存一次，不然 80 筆指標要重寫 80 次整份 JSON
             add_metric_datapoint(
                 company, name, period, value,
                 unit=m.get("單位") or None,
                 yoy=m.get("YoY") or None,
+                save=False,
             )
+            added = True
+    if added:
+        save_graph()
 
 
 def _clean_number(v):

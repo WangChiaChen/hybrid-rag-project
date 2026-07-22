@@ -34,6 +34,7 @@ from graph_rag import (
     list_metrics,
     list_periods,
 )
+from paths import purge_old, safe_join
 from metric_alignment import (
     classify_metric,
     is_cross_comparable,
@@ -998,12 +999,51 @@ def _sse(event_type, **fields):
     return "data: " + json.dumps({"type": event_type, **fields}, ensure_ascii=False) + "\n\n"
 
 
+def _with_heartbeat(events, interval=10):
+    """把事件流丟到背景執行緒跑，靜默超過 interval 秒就送一個 SSE 註解當心跳。
+
+    為什麼需要：EAP 一題實測會有 15 秒以上完全不吐任何事件（它的 SSE 不是逐字送的）。
+    本機直連沒事，但雲端前面有反向代理（Render／Nginx／Cloudflare），
+    連線靜默太久會被判定逾時而直接切斷，使用者就看到查詢無故失敗。
+    「: 」開頭的行是 SSE 的註解，前端會忽略，但足以讓連線維持活著。
+    """
+    import queue
+
+    q, box = queue.Queue(), {}
+    done = object()
+
+    def worker():
+        try:
+            for item in events:
+                q.put(item)
+        except Exception as exc:
+            box["error"] = exc
+        finally:
+            q.put(done)
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    while True:
+        try:
+            item = q.get(timeout=interval)
+        except queue.Empty:
+            yield ": keep-alive\n\n"
+            continue
+        if item is done:
+            break
+        yield item
+    t.join()
+    if "error" in box:
+        # 已經開始串流才出錯，沒辦法改 HTTP 狀態碼，只能用事件告訴前端
+        yield _sse("error", text=str(box["error"]))
+
+
 def _with_live_progress(fn, **kwargs):
     """在背景執行緒跑 fn，即時 yield 它回報的進度（已包成 SSE 事件）；
     用 `yield from` 取得 fn 的回傳值。
 
     fn 是同步函式（prepare_answer），若在主執行緒直接跑完再排空進度，
-    所有進度會在結束того一瞬間才一起送出——使用者盯著「查詢中…」好幾秒，
+    所有進度會在結束的那一瞬間才一起送出——使用者盯著「查詢中…」好幾秒，
     然後三行進度一閃而過，等於沒做。丟到執行緒跑、主線邊等邊送才是真的即時。
     """
     import queue
@@ -1050,7 +1090,7 @@ def chat_stream(req: ChatRequest):
     company = req.company or _infer_company(req.question)
     period = req.period or _infer_period(req.question, company)
 
-    def gen():
+    def events():
         try:
             if req.use_eap:
                 from eap_client import ask_smart_stream, get_or_create_chat
@@ -1101,7 +1141,8 @@ def chat_stream(req: ChatRequest):
         except Exception as e:
             yield _sse("error", text=str(e))
 
-    return StreamingResponse(gen(), media_type="text/event-stream", headers={
+    # 包一層心跳：EAP 那段實測會靜默 15 秒以上，雲端代理可能因此切斷連線
+    return StreamingResponse(_with_heartbeat(events()), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",   # 擋掉反向代理的緩衝，否則串流會被整段憋到最後才吐
     })
@@ -1201,6 +1242,13 @@ def _run_upload_job(job_id, kind, saved_path, company, period, max_pages):
         hint = "（常見原因：免費 API 額度用完，訊息會含 RESOURCE_EXHAUSTED 或 429）" \
             if ("RESOURCE_EXHAUSTED" in msg or "429" in msg) else ""
         _set_job(job_id, status="error", progress=1.0, message=f"處理失敗：{msg}{hint}")
+    finally:
+        # 原始上傳檔（PDF／音檔）已經解析完，沒有留著的必要——雲端磁碟很小
+        try:
+            if os.path.exists(saved_path):
+                os.remove(saved_path)
+        except OSError:
+            pass
 
 
 @app.post("/api/upload")
@@ -1220,8 +1268,10 @@ def upload(
 
     temp_dir = os.path.join(BASE_DIR, "uploads_temp")
     os.makedirs(temp_dir, exist_ok=True)
-    safe = f"{company}_{period}".replace("/", "_").replace("\\", "_")
-    saved_path = os.path.join(temp_dir, f"{safe}{ext}")
+    # 順手清掉一天前的殘留：暫存檔與 PDF 轉出的圖片原本沒人清，長期會塞爆磁碟
+    purge_old(temp_dir)
+    purge_old(os.path.join(BASE_DIR, "pages"))
+    saved_path = safe_join(temp_dir, f"{company}_{period}{ext}")
     with open(saved_path, "wb") as out:
         out.write(file.file.read())
 
