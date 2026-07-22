@@ -93,6 +93,38 @@ def is_cross_comparable(name, unit=None):
     return classify_metric(name, unit) in ("ratio", "per_share")
 
 
+# 依財務意義分組。60 幾個指標平鋪很難讀，照這個順序分區才能照邏輯瀏覽。
+# 順序即重要性，第一個命中的就是它的組別。
+#
+# 放在後端而不是前端：分組規則是「財務判斷」，跟 classify_metric、is_cumulative 同一類，
+# 應該和它們待在一起。前端只負責顯示後端算好的結果，改規則不必重新部署前端。
+_GROUPS = (
+    ("獲利能力", re.compile(r"淨利|獲利|盈餘|EPS|收益|營收|報酬率|ROE|ROA|股利|配發")),
+    ("資本結構", re.compile(r"資本適足|權益|淨值|槓桿|清償|CSM|RBC")),
+    ("資產品質", re.compile(r"逾期|呆帳|覆蓋|減損|信用")),
+    ("業務規模", re.compile(r"放款|存款|資產|保費|手續費|財富管理|信用卡|規模|市占|市佔")),
+    ("現金流量", re.compile(r"現金流|現金及約當")),
+)
+
+# 金控層級的門面數字，在畫面上要比其他項目搶眼
+_HERO = re.compile(r"^(合併稅後淨利|本期淨利|稅後淨利|基本每股盈餘|每股稅後盈餘|EPS|ROE|"
+                   r"稅後股東權益報酬率|資產總計)")
+
+
+def metric_category(name):
+    """這個指標屬於哪一個財務意義分組；都不符合就歸「其他」。"""
+    n = str(name)
+    for label, pattern in _GROUPS:
+        if pattern.search(n):
+            return label
+    return "其他"
+
+
+def is_hero_metric(name):
+    """是不是該放大呈現的門面指標。"""
+    return bool(_HERO.match(str(name)))
+
+
 def _cosine_sim(a, b):
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = sum(x * x for x in a) ** 0.5

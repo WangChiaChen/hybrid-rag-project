@@ -62,20 +62,13 @@ function onCompanyChange() {
 }
 
 // ---------- 指標分組 ----------
-// 16 個指標平鋪就已經有壓迫感，60 個更不用說。依財務意義分區，
-// 使用者才能照邏輯瀏覽而不是逐張掃描。順序＝重要性。
-const GROUPS = [
-  { key: "獲利能力", test: (n) => /淨利|獲利|盈餘|EPS|收益|營收|報酬率|ROE|ROA|股利|配發/.test(n) },
-  { key: "資本結構", test: (n) => /資本適足|權益|淨值|槓桿|清償|CSM|RBC/.test(n) },
-  { key: "資產品質", test: (n) => /逾期|呆帳|覆蓋|減損|信用/.test(n) },
-  { key: "業務規模", test: (n) => /放款|存款|資產|保費|手續費|財富管理|信用卡|規模|市占|市佔/.test(n) },
-  { key: "現金流量", test: (n) => /現金流|現金及約當/.test(n) },
-  { key: "其他", test: () => true },
-];
-const groupOf = (name) => (GROUPS.find((g) => g.test(name)) || GROUPS[GROUPS.length - 1]).key;
-
-// 金控層級的門面數字。這幾個要比其他項目搶眼。
-const HERO = /^(合併稅後淨利|本期淨利|稅後淨利|基本每股盈餘|每股稅後盈餘|EPS|ROE|稅後股東權益報酬率|資產總計)/;
+// 分組與「門面指標」的判斷都由後端給（見 metric_alignment.metric_category／is_hero_metric）。
+// 這裡刻意不再自己用 regex 猜——那是財務判斷，跟單位、累計別一樣該由後端統一決定，
+// 改規則才不必連前端一起重新部署。
+// 顯示順序仍由前端決定，因為那是版面的事。
+const GROUP_ORDER = ["獲利能力", "資本結構", "資產品質", "業務規模", "現金流量", "其他"];
+const groupOf = (m) => m.category || "其他";
+const isHero = (m) => !!m.hero;
 
 // 財務術語小辭典：滑到指標名稱上顯示定義，給非財務背景的評審看得懂。
 // key 會用「包含」比對指標名稱，長的排前面（NIM 要先於「利」之類的短詞）。
@@ -102,13 +95,61 @@ function annotateTerms(name) {
     const i = name.indexOf(term);
     if (i >= 0) {
       const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+      // tabindex 讓鍵盤走得到、aria-label 讓螢幕報讀器唸得出定義（tooltip 是 CSS
+      // 的 ::after，報讀器讀不到 data-tip）。觸控則靠下方委派的 click 切換。
       return esc(name.slice(0, i)) +
-        `<span class="term" data-tip="${esc(tip)}">${esc(term)}</span>` +
+        `<span class="term" tabindex="0" role="button" data-tip="${esc(tip)}"` +
+        ` aria-label="${esc(term)}：${esc(tip)}">${esc(term)}</span>` +
         esc(name.slice(i + term.length));
     }
   }
   return name.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 }
+
+// 提示框預設往右展開，但術語若靠近畫面右緣就會伸出去、把整頁撐寬（會多出橫向捲軸）。
+// 注意隱藏狀態用的是 visibility:hidden，它「仍然佔版面」——所以不能等 hover 才翻邊，
+// 每次渲染完就要把所有術語都量過一遍，否則還沒互動頁面就已經被撐寬了。
+function placeTooltip(term) {
+  const tipW = Math.min(240, window.innerWidth - 40);
+  const room = document.documentElement.clientWidth - term.getBoundingClientRect().left;
+  term.classList.toggle("flip", room < tipW + 8);
+}
+
+function placeAllTooltips() {
+  document.querySelectorAll(".term").forEach(placeTooltip);
+}
+
+// 視窗尺寸變了要重算（例如手機轉向、桌面拖曳視窗）
+let placeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(placeTimer);
+  placeTimer = setTimeout(placeAllTooltips, 150);
+});
+document.addEventListener("mouseover", (e) => {
+  const t = e.target.closest(".term");
+  if (t) placeTooltip(t);
+});
+document.addEventListener("focusin", (e) => {
+  const t = e.target.closest(".term");
+  if (t) placeTooltip(t);
+});
+
+// 術語解釋的觸控支援：手機沒有 hover，點一下切換顯示。
+// 用事件委派——術語標籤是每次渲染動態產生的，逐一綁定會漏掉後來畫上去的。
+document.addEventListener("click", (e) => {
+  const term = e.target.closest(".term");
+  document.querySelectorAll(".term.is-open").forEach((t) => {
+    if (t !== term) t.classList.remove("is-open");
+  });
+  if (term) {
+    e.stopPropagation();   // 別讓這一下順便觸發卡片的趨勢載入
+    placeTooltip(term);
+    term.classList.toggle("is-open");
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.querySelectorAll(".term.is-open").forEach((t) => t.classList.remove("is-open"));
+});
 
 // ---------- 卡片 ----------
 function deltaHtml(m) {
@@ -179,7 +220,8 @@ function attachSpark(card, company, metric) {
   const el = card.querySelector(".spark");
   const labelEl = card.querySelector(".spark-label");
   if (!el) return;
-  card.addEventListener("mouseenter", async () => {
+
+  const loadSpark = async () => {
     if (el.dataset.done) return;
     el.dataset.done = "1";
     const key = `${company}|${metric}`;
@@ -191,13 +233,26 @@ function attachSpark(card, company, metric) {
     } catch {
       labelEl.textContent = "趨勢載入失敗";
     }
-  }, { once: false });
+  };
+
+  // 觸控裝置沒有 hover，手機／平板上光靠 mouseenter 這條趨勢線永遠出不來。
+  // 補上點擊與鍵盤 focus，並讓卡片可以用 Tab 走到（tabindex）。
+  card.addEventListener("mouseenter", loadSpark);
+  card.addEventListener("click", loadSpark);
+  card.addEventListener("focus", loadSpark);
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+  card.setAttribute("aria-label", `${metric}，按下顯示近六期趨勢`);
+  card.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); loadSpark(); }
+  });
 }
 
 // ---------- 渲染 ----------
 function render(data) {
-  const heroes = data.metrics.filter((m) => HERO.test(m.metric));
-  const rest = data.metrics.filter((m) => !HERO.test(m.metric));
+  if (!data.metrics.length) return renderEmpty(data);
+  const heroes = data.metrics.filter(isHero);
+  const rest = data.metrics.filter((m) => !isHero(m));
 
   // Hero
   const hbox = $("hero");
@@ -213,8 +268,8 @@ function render(data) {
   // 其餘依財務意義分組
   const box = $("groups");
   box.innerHTML = "";
-  GROUPS.forEach((g) => {
-    const items = rest.filter((m) => groupOf(m.metric) === g.key);
+  GROUP_ORDER.forEach((key) => {
+    const items = rest.filter((m) => groupOf(m) === key);
     if (!items.length) return;
     // 整組單位一致的話，就把單位提到組標題，不用每張卡都重複
     const units = [...new Set(items.map((m) => m.unit).filter(Boolean))];
@@ -222,7 +277,7 @@ function render(data) {
     sec.className = "group";
     sec.innerHTML = `
       <div class="group-head">
-        <span class="dot"></span><h3>${g.key}</h3><span class="n">${items.length} 項</span>
+        <span class="dot"></span><h3>${key}</h3><span class="n">${items.length} 項</span>
         ${units.length === 1 ? `<span class="u">單位：${units[0]}</span>` : ""}
       </div>
       <div class="cards"></div>`;
@@ -240,6 +295,8 @@ function render(data) {
   $("metric-count").textContent =
     `${data.metrics.length} 個　·　${data.company} ${data.period}` +
     (data.last_period ? ` vs ${data.last_period}` : "");
+
+  placeAllTooltips();   // 卡片畫完才量得到位置
 }
 
 // ---------- 圖表 ----------
@@ -288,7 +345,7 @@ async function load() {
   if (!company || !period) return;
 
   $("dash-error").classList.add("hidden");
-  $("groups").innerHTML = '<p class="loading">載入中…</p>';
+  showSkeleton();
 
   try {
     const qs = new URLSearchParams({ company, period });
@@ -303,9 +360,35 @@ async function load() {
         `跨季比較沒有意義——新年度第一季必然低於前一年第四季，那是重新起算不是衰退，所以系統不給變化率。`
       : "";
   } catch (e) {
+    $("hero").innerHTML = "";
     $("groups").innerHTML = "";
     showError(`載入失敗：${e.message}`);
   }
+}
+
+// 載入骨架：冷啟動時後端要 30-60 秒才醒，一片空白會讓人以為壞了。
+// 先畫出卡片的輪廓，使用者知道版面長什麼樣、也知道系統在跑。
+function showSkeleton() {
+  const cell = '<div class="sk-card"><span class="sk-line sk-name"></span>'
+    + '<span class="sk-line sk-val"></span></div>';
+  $("hero").innerHTML = cell.repeat(4);
+  $("groups").innerHTML = `<div class="group"><div class="group-head">
+      <span class="dot"></span><span class="sk-line sk-title"></span></div>
+    <div class="cards">${cell.repeat(8)}</div></div>`;
+  $("hero-head").classList.remove("hidden");
+  $("metric-count").textContent = "載入中…";
+}
+
+// 空狀態：這一期真的沒有指標時，講清楚並給下一步，不要只留一片空白
+function renderEmpty(data) {
+  $("hero").innerHTML = "";
+  $("hero-head").classList.add("hidden");
+  $("groups").innerHTML = `<div class="empty-state">
+      <p class="empty-title">${escapeHtml(data.company)} ${escapeHtml(data.period)} 沒有收錄任何指標</p>
+      <p class="empty-hint">換一個期間看看，或到「資料來源總覽」上傳這一期的簡報 PDF／法說會錄音。</p>
+    </div>`;
+  $("metric-count").textContent = `0 個　·　${data.company} ${data.period}`;
+  $("cum-note").textContent = "";
 }
 
 // ================= 跨機構比較 =================

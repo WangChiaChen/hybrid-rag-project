@@ -254,7 +254,11 @@ body {
   content: attr(data-tip);
   position: absolute;
   left: 0; bottom: 145%;
-  width: 240px;
+  /* 固定 240px 掛在靠右的術語上會伸出卡片、把整頁撐寬。改成不超過視窗可用寬度，窄螢幕自動縮。
+     box-sizing 一定要 border-box：預設的 content-box 會讓實際寬度變成
+     240＋左右 padding 各 11px ＝ 262px，JS 依宣告值算翻邊就會少算 22px 而判斷失準。 */
+  box-sizing: border-box;
+  width: min(240px, calc(100vw - 40px));
   background: #2A2E35; color: #fff;
   font-size: 12px; font-weight: 400; line-height: 1.55;
   padding: 9px 11px; border-radius: 4px;
@@ -266,7 +270,16 @@ body {
   pointer-events: none;
   white-space: normal;
 }
-.term:hover::after { opacity: 1; visibility: visible; transform: translateY(0); }
+/* 觸控裝置沒有 hover，鍵盤使用者也走不到——補上 focus 與「點過」的狀態，
+   否則這些術語解釋在手機上等於不存在。 */
+.term:hover::after,
+.term:focus::after,
+.term:focus-visible::after,
+.term.is-open::after { opacity: 1; visibility: visible; transform: translateY(0); }
+/* 術語落在容器右側時，提示框往左展開，否則會伸出畫面把整頁撐寬
+   （實測桌面 1265px 下多 72px、手機多 3px）。翻邊由 placeTooltip() 依實際位置決定。 */
+.term.flip::after { left: auto; right: 0; }
+.term:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
 
 /* ---------- 過場動畫 ---------- */
 @keyframes fade-up {
@@ -805,6 +818,44 @@ footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height
 }
 .chat-input input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
 .chat-input .btn-primary { padding: 0 22px; }
+
+/* ---------- 載入骨架 ---------- */
+/* 冷啟動時後端要 30-60 秒才醒。先畫出卡片輪廓，使用者知道版面長什麼樣、
+   也知道系統在跑，而不是面對一片空白猜是不是壞了。 */
+.sk-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#hero .sk-card { min-height: 104px; }
+#groups .cards .sk-card { min-height: 92px; }
+.sk-line {
+  display: block;
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #EEF1F4 25%, #F7F9FB 37%, #EEF1F4 63%);
+  background-size: 400% 100%;
+  animation: sk-shimmer 1.3s ease-in-out infinite;
+}
+.sk-name { width: 62%; }
+.sk-val { width: 40%; height: 22px; }
+.sk-title { width: 120px; height: 14px; }
+@keyframes sk-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+/* ---------- 空狀態 ---------- */
+.empty-state {
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 42px 24px;
+  text-align: center;
+}
+.empty-title { margin: 0 0 8px; font-size: 15px; font-weight: 700; color: var(--text); }
+.empty-hint { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.7; }
 
 /* ---------- 串流中的進度列 ---------- */
 /* 串流開始吐字前，讓使用者知道系統在做什麼（判斷路由／檢索／連線 EAP…）。

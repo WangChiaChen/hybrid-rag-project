@@ -34,7 +34,13 @@ from graph_rag import (
     list_metrics,
     list_periods,
 )
-from metric_alignment import classify_metric, is_cross_comparable, norm_metric_name
+from metric_alignment import (
+    classify_metric,
+    is_cross_comparable,
+    is_hero_metric,
+    metric_category,
+    norm_metric_name,
+)
 from report_generator import generate_report
 from standard_metrics import STANDARD_METRICS, _pick, align_standard, key_ratios
 from vector_rag import get_all_sources, query_vector_rag
@@ -180,6 +186,10 @@ def _metric_payload(company: str, m: dict, umap: Optional[dict] = None,
         "type": TYPE_LABEL.get(kind, "金額"),
         "comparable": kind in ("ratio", "per_share"),
         "cumulative": is_cumulative(company, m["metric"]),
+        # 分組與門面判斷也由後端給，前端不必自己用 regex 猜。
+        # 這樣改分類規則只要動後端，不用重新部署前端。
+        "category": metric_category(m["metric"]),
+        "hero": is_hero_metric(m["metric"]),
     }
 
 
