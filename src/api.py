@@ -686,6 +686,151 @@ def _cross_check_prose(answer, fallback_period):
     return out, checked
 
 
+# 數字後面緊跟的單位。EAP 常自己換算單位而且會算錯，所以比對前一定要看它「宣稱」的單位，
+# 不能假設它跟本地一樣。
+_NUM_WITH_UNIT = re.compile(r"(-?[\d,]+(?:\.\d+)?)\s*(兆元|十億元|億元|百萬元|千元|元)?")
+
+
+def _to_base_amount(value, unit):
+    """把金額換算成「元」，用來比較不同單位的數字。認不出單位就回 None。"""
+    if unit is None:
+        return None
+    u = str(unit).strip()
+    if u == "元":
+        return value
+    scale = _UNIT_SCALE.get(u)
+    return value * scale if scale else None
+
+
+def _pick_local_metric(company, period, label):
+    """在本地找出「叫這個名字」的指標，優先集團層級、排除子公司。
+
+    重用 standard_metrics 那套挑選邏輯：問「稅後淨利」時，中信有
+    「3M26合併稅後淨利」「中信銀行第一季稅後淨利」「台灣人壽第一季稅後淨利」等多筆，
+    直接抓第一個會比到子公司的數字，反而製造假警報。
+    """
+    from standard_metrics import _GROUP_LEVEL, _SUBSIDIARY, _pick
+
+    ms = list_metrics(company, period)
+    if not ms:
+        return None
+    # 只留「金額類」候選。問「稅後淨利」時，中信有「其他子公司整體稅後淨利年成長 111%」
+    # 這種比率型指標也含關鍵字，挑到它就會拿 111% 去跟 EAP 的億元數字比，必然誤報。
+    ms = [m for m in ms if classify_metric(m["metric"], m.get("unit")) == "amount"]
+    if not ms:
+        return None
+    spec = {"include": [re.escape(label)],
+            # 成長／年增這類衍生指標不是金額本身
+            "exclude": _SUBSIDIARY + [r"成長", r"年增", r"季增", r"佔比", r"占比"],
+            "prefer": _GROUP_LEVEL, "unit": ""}
+    return _pick(ms, spec, period)
+
+
+def cross_check_metrics(answer, company, period):
+    """比對 EAP 答案中「任何本地也有的指標」數字，不限於七個標準比率。
+
+    為什麼要擴大：實測 EAP 回答「中信稅後淨利 166 億、玉山 87.6 億」，
+    而本地是 236.08 億與 100.68 億——它自己換算單位而且算錯了。
+    但「稅後淨利」不在 STANDARD_METRICS 的七個標準比率裡，原本的交叉驗證完全比不到，
+    這種錯就這樣送到使用者面前。
+
+    只比對「本地明確找得到對應指標」的項目，找不到就跳過——
+    沿用專案一貫的高精確度優先：寧可少報，也不要對不相干的數字發假警報。
+    回傳 (不一致清單, 實際比對過幾筆)。
+    """
+    text = str(answer)
+    # 候選標籤：本地這一期所有指標的名稱，取「去掉期別標籤」後的形式來比對，
+    # 因為 EAP 通常寫「稅後淨利」而本地叫「3M26合併稅後淨利」
+    labels = set()
+    for m in list_metrics(company, period):
+        norm = norm_metric_name(m["metric"])
+        if len(norm) >= 3:
+            labels.add(norm)
+    labels |= {"稅後淨利", "營業收入", "營業費用", "總資產"}   # EAP 少照抄本地的完整名稱
+    labels = sorted(labels, key=len, reverse=True)   # 長的先比，避免「淨利」搶走「稅後淨利」
+
+    rows = _markdown_rows(text)
+    out, checked = [], 0
+
+    def compare(comp, label, eap_val, eap_unit):
+        """把一組 (公司,指標,數值,單位) 跟本地比。回傳是否真的比到了。"""
+        nonlocal checked
+        pick = _pick_local_metric(comp, period, label)
+        if not pick or not pick.get("unit"):
+            return False
+        # 兩邊都換算成「元」才有可比性——EAP 宣稱的單位常跟本地不同，而且它常換算錯
+        eap_base = _to_base_amount(eap_val, eap_unit)
+        local_base = _to_base_amount(pick["value"], pick["unit"])
+        if eap_base is None or local_base is None:
+            return False
+        checked += 1
+        if _significant_gap(eap_base, local_base):
+            fmt = lambda v, u: f"{v:,.2f}".rstrip("0").rstrip(".") + (u or "")
+            out.append({
+                "company": comp, "metric": label, "period": period,
+                "eap_value": fmt(eap_val, eap_unit),
+                "local_value": fmt(pick["value"], pick["unit"]),
+                "local_source": pick["name"],
+            })
+        return True
+
+    if len(rows) >= 2:
+        # 表格：單位常寫在表頭（「稅後淨利（億元）」），不在數字旁邊；公司則寫在各列
+        header, body = rows[0], rows[1:]
+        cols = {}
+        for i, h in enumerate(header):
+            label = next((l for l in labels if l in h), None)
+            if label:
+                um = re.search(r"[（(]\s*(兆元|十億元|億元|百萬元|千元|元)\s*[）)]", h)
+                cols[i] = (label, um.group(1) if um else None)
+        for r in body:
+            comp = next((rc for rc in (_resolve_company(c) for c in r) if rc), None) or company
+            for i, cell in enumerate(r):
+                if i not in cols:
+                    continue
+                label, unit = cols[i]
+                m = _NUM_WITH_UNIT.search(cell)
+                if not m:
+                    continue
+                try:
+                    val = float(m.group(1).replace(",", ""))
+                except ValueError:
+                    continue
+                compare(comp, label, val, m.group(2) or unit)
+    else:
+        # 純文字：單位可能緊跟數字，也可能寫在指標名稱後的括號裡
+        seen = set()
+        for label in labels:
+            idx = text.find(label)
+            if idx < 0 or label in seen:
+                continue
+            tail = text[idx + len(label): idx + len(label) + 12]
+            um = re.search(r"[（(]\s*(兆元|十億元|億元|百萬元|千元|元)\s*[）)]", tail)
+            m = _NUM_WITH_UNIT.search(text, idx + len(label))
+            if not m:
+                continue
+            try:
+                val = float(m.group(1).replace(",", ""))
+            except ValueError:
+                continue
+            if compare(company, label, val, m.group(2) or (um.group(1) if um else None)):
+                seen.add(label)
+    return out, checked
+
+
+def _markdown_rows(text):
+    """把 markdown 表格的資料列抽出來（跳過 |---| 分隔列）。"""
+    rows = []
+    for ln in str(text).split("\n"):
+        s = ln.strip()
+        if s.startswith("|") and s.count("|") >= 2:
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if all(set(c) <= set("-: ") for c in cells):
+                continue
+            rows.append(cells)
+    return rows
+
+
 def cross_check_eap(answer, fallback_period):
     """比對 EAP 答案中的標準指標數字與本地知識庫。
     回傳 (不一致清單, 實際比對過幾筆)。
@@ -921,10 +1066,16 @@ def _finalize_eap(answer, original, company, period, last_period):
             "company": company, "period": period, "last_period": last_period}
     if bar:
         resp["chart_bar"] = bar
-    # 交叉驗證：EAP 的數字跟本地知識庫差太多就標出來提醒
+    # 交叉驗證：EAP 的數字跟本地知識庫差太多就標出來提醒。
+    # 兩層——標準比率（跨公司對齊過的定義）＋ 任何本地也有的指標（抓單位換算錯誤那類）。
     checked = 0
     try:
         gaps, checked = cross_check_eap(answer, period)
+        more, more_checked = cross_check_metrics(answer, company, period)
+        checked += more_checked
+        # 同一個指標可能兩層都抓到，用 (公司,指標) 去重，標準比率那層優先
+        seen = {(g["company"], g["metric"]) for g in gaps}
+        gaps += [g for g in more if (g["company"], g["metric"]) not in seen]
         if gaps:
             resp["cross_check"] = gaps
     except Exception:
