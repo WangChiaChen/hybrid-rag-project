@@ -14,6 +14,8 @@ from metric_alignment import is_cross_comparable
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
+GEN_MODEL = "gemini-flash-lite-latest"
+
 # Gemini client 改成「用到才建立」。原本在 import 時就建立，一旦部署環境沒設
 # GEMINI_API_KEY 會直接拋 ValueError、讓整個服務起不來（Render 上就是 status 1）。
 # 延後建立後：沒設 key 也能正常啟動，只有真的要用到 AI 時才報清楚的錯。
@@ -154,10 +156,62 @@ def _periods_with_metric(company, metric):
 
 
 def answer_question(question, company, this_period, last_period=None):
-    """回傳結構化結果。單一公司的 CALC 類問題直接用公式結果組答案，不額外呼叫 LLM，節省額度。
+    """回傳結構化結果（一次給完，不串流）。
+
+    實作上分成兩段：prepare_answer 蒐證並組出 prompt，這裡再做生成。
+    拆開是為了讓 /api/chat/stream 能在同一套邏輯上逐字串流，不必維護第二份檢索程式碼。
+    """
+    prepared = prepare_answer(question, company, this_period, last_period)
+    if prepared["answer"] is not None:      # CALC 捷徑：公式算得出來就不呼叫 LLM
+        return {k: prepared[k] for k in ("answer", "route", "calc_result", "sources")}
+
+    response = call_with_retry(lambda: get_client().models.generate_content(
+        model=GEN_MODEL,
+        contents=prepared["prompt"],
+    ))
+    return {
+        "answer": response.text,
+        "route": prepared["route"],
+        "calc_result": prepared["calc_result"],
+        "sources": prepared["sources"],
+    }
+
+
+def generate_stream(prompt):
+    """把 prompt 送去生成，逐塊 yield 文字。給 SSE 串流用。
+
+    只對「建立串流」這個動作重試；一旦開始吐字就不重試了——重試會讓使用者
+    看到答案從頭再寫一次。
+    """
+    stream = call_with_retry(lambda: get_client().models.generate_content_stream(
+        model=GEN_MODEL,
+        contents=prompt,
+    ))
+    for chunk in stream:
+        text = getattr(chunk, "text", None)
+        if text:
+            yield text
+
+
+def prepare_answer(question, company, this_period, last_period=None, progress=None):
+    """蒐集證據並組出要送給 LLM 的 prompt。
+
+    回傳 dict：
+      answer      —— 有值代表不需要 LLM（CALC 捷徑），直接就是最終答案
+      prompt      —— 有值代表要送去生成
+      route / calc_result / sources —— 前端要用的中繼資料
+
+    progress：可選的回呼，用來在串流模式下即時回報「正在做什麼」，
+    讓使用者在等待生成前就知道系統沒有卡住。
+
+    單一公司的 CALC 類問題直接用公式結果組答案，不額外呼叫 LLM，節省額度。
     如果問題提到其他公司，會自動切換成跨公司比較模式：不強迫鎖定單一指標，
     而是把相關公司完整的指標資料交給 LLM 統整回答，避免問題太籠統時硬選錯指標。
     """
+    def _say(text):
+        if progress:
+            progress(text)
+
     companies_in_scope = detect_mentioned_companies(question, company)
     is_cross_company = len(companies_in_scope) > 1
 
@@ -166,6 +220,7 @@ def answer_question(question, company, this_period, last_period=None):
     sources = []
 
     if is_cross_company:
+        _say(f"偵測到跨公司問題（{'、'.join(companies_in_scope)}），彙整各家指標中…")
         comparable_lines = []  # 比率／每股類：單位無關，可直接比大小
         amount_lines = []      # 絕對金額：各家申報單位可能不同，比較前要留意單位
         for c in companies_in_scope:
@@ -206,6 +261,7 @@ def answer_question(question, company, this_period, last_period=None):
         route = "BOTH"
 
     else:
+        _say("AI Agent 判斷該用精準計算還是語意檢索…")
         available = [m["metric"] for m in list_metrics(company, this_period)]
         route, metric_used = route_and_pick_metric(question, available)
 
@@ -240,7 +296,9 @@ def answer_question(question, company, this_period, last_period=None):
             answer_text = f"{company} {calc_result['period']} 的{calc_result['metric']}為 {calc_result['value']}{change_text}。"
             if calc_result["period"] != this_period:
                 answer_text += f"（你選的 {this_period} 沒有這個指標，改用最近有資料的 {calc_result['period']}）"
-            return {"answer": answer_text, "route": route, "calc_result": calc_result, "sources": []}
+            # 純計算題不必走 LLM——答案就是公式結果本身
+            return {"answer": answer_text, "prompt": None, "route": route,
+                    "calc_result": calc_result, "sources": []}
 
         if calc_result:
             change_text = f"，較 {prev_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
@@ -249,6 +307,7 @@ def answer_question(question, company, this_period, last_period=None):
 
         # NARRATIVE/BOTH 要檢索；CALC 但連跨期都找不到指標時，也退回語意檢索，不要直接放棄
         if route in ("NARRATIVE", "BOTH") or (route == "CALC" and not calc_result):
+            _say("檢索法說會內容中…")
             vec_results = query_vector_rag(question, top_k=8, company=company, period=this_period)
             docs = vec_results.get("documents", [[]])[0]
             metas = vec_results.get("metadatas", [[]])[0]
@@ -281,13 +340,10 @@ def answer_question(question, company, this_period, last_period=None):
 
 問題：{question}"""
 
-    response = call_with_retry(lambda: get_client().models.generate_content(
-        model="gemini-flash-lite-latest",
-        contents=final_prompt,
-    ))
-
+    _say("整理答案中…")
     return {
-        "answer": response.text,
+        "answer": None,          # 交給呼叫端決定要一次生成還是串流
+        "prompt": final_prompt,
         "route": route,
         "calc_result": calc_result,
         "sources": sources,

@@ -11,6 +11,7 @@
 一個服務搞定，前後端同源也就沒有 CORS 問題。
 """
 import io
+import json
 import os
 import re
 import threading
@@ -855,6 +856,83 @@ def _augment_with_local(question, ctx):
     return None if _eap_found_nothing(aug) else str(aug).strip()
 
 
+def _build_eap_question(req, company, period):
+    """把使用者的問題加工成要送給 EAP 的提問，回傳 (提問, 原問題, focus)。
+
+    抽出來是為了讓 /api/chat 與 /api/chat/stream 共用同一套加工規則——
+    範圍限制、同義詞增補、圖表指示這幾條都直接影響答案品質，不能兩邊各寫一份。
+    """
+    from eap_client import _short_name
+    original = req.question
+    # 使用者若「鎖定」了公司／期間（下拉選單明確選了，非系統推測），把它明講給 EAP，
+    # 否則像「eps」這種問題 EAP 收不到公司脈絡，會自己亂挑公司答（甚至跳過你要問的那家）。
+    # 只在明確鎖定時注入，系統推測的就不硬塞，以免用猜錯的公司誤導 EAP。
+    scope = " ".join(x for x in (req.company, req.period) if x)
+    # 判斷是不是「比較題」：問題已點名鎖定以外的其他公司，或帶比較字眼。
+    # 比較題不能用「只針對X、不要提及其他公司」——那會跟比較意圖打架，導致 EAP 回「查不到」。
+    others = [c for c in list_companies() if c != req.company
+              and (c in original or (_short_name(c) and _short_name(c) in original))]
+    is_compare = bool(others) or bool(re.search(r"比較|相比|對比|對照|vs|誰|哪一?家|哪個", original, re.I))
+    if scope and is_compare:
+        q = f"請以「{scope}」為主要對象回答，可與問題中提到的其他公司比較：{original}"
+    elif scope:
+        q = f"請只針對「{scope}」回答，不要提及其他公司：{original}"
+    else:
+        q = original
+    # 同義詞增補：各家指標用詞不一（國泰「淨利差」vs 玉山「淨利息收益率」都是 NIM），
+    # 把別名一併告訴 EAP，避免它因用詞不同而回「查不到」。
+    aliases = _metric_aliases(original)
+    alias_hint = f"（此指標的常見別名：{'、'.join(aliases)}，任一名稱的數據皆可採用）" if aliases else ""
+    if alias_hint:
+        q += alias_hint
+    focus = (original + alias_hint) if is_compare else None
+    # 問到圖表時，EAP 只回「畫圖指令」卻常漏掉數字。明確要它先用表格列出各期數值，
+    # 我們才能用「EAP 自己的數據」把圖畫出來，讓圖和它的答案一致。
+    if re.search(r"圖|chart|長條|直條|趨勢|走勢|各期|視覺化|bar", q, re.I):
+        q += "\n\n（若要呈現圖表，請務必先用 markdown 表格完整列出各期的數值，再附上圖表。）"
+    return q, original, focus
+
+
+def _finalize_eap(answer, original, company, period, last_period):
+    """EAP 回答後的共同收尾：畫圖、交叉驗證、查無資料時的本地補強。
+    /api/chat 與 /api/chat/stream 共用，避免兩條路徑的加值行為不一致。
+    """
+    # 優先用 EAP 答案裡的資料表畫圖；沒有才退回我們的 Graph RAG
+    answer, bar = _eap_chart_from_directive(answer, company, period)
+    resp = {"answer": answer, "route": "EAP", "calc_result": None, "sources": [],
+            "company": company, "period": period, "last_period": last_period}
+    if bar:
+        resp["chart_bar"] = bar
+    # 交叉驗證：EAP 的數字跟本地知識庫差太多就標出來提醒
+    try:
+        gaps = cross_check_eap(answer, period)
+        if gaps:
+            resp["cross_check"] = gaps
+    except Exception:
+        pass  # 交叉驗證只是加值提醒，出錯不能影響主回答
+    # EAP 撈不到時，改用「本地檢索 ＋ EAP 生成」再試一次（見 _augment_with_local）。
+    # 兩邊的知識庫是各自獨立的：EAP 只有你在它後台上傳的簡報，法說會逐字稿是我們自己
+    # STT 轉的、只存在本地。所以「EAP 查不到」很常見的原因是資料不在它那邊，不是問題不好。
+    try:
+        if _eap_found_nothing(answer):
+            ctx = _local_context(original, company, period)
+            if ctx:
+                aug = _augment_with_local(original, ctx)
+                if aug:
+                    resp["answer"] = aug
+                    resp["route"] = "EAP_RAG"
+                    resp["sources"] = ctx["sources"]
+                else:
+                    # 連補了資料都答不出來 → 留一條完全走本地的退路
+                    resp["local_fallback"] = {
+                        "question": original, "company": company,
+                        "period": period, "source": ctx["label"],
+                    }
+    except Exception:
+        pass  # 補強只是加值，出錯不能影響 EAP 的主回答
+    return resp
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     company = req.company or _infer_company(req.question)
@@ -862,77 +940,15 @@ def chat(req: ChatRequest):
 
     if req.use_eap:
         # EAP 的檢索器對多公司混合查詢會漏抓，ask_smart 會自動拆解成逐家查詢
-        from eap_client import _short_name, ask_smart, get_or_create_chat
-        original = req.question
-        # 使用者若「鎖定」了公司／期間（下拉選單明確選了，非系統推測），把它明講給 EAP，
-        # 否則像「eps」這種問題 EAP 收不到公司脈絡，會自己亂挑公司答（甚至跳過你要問的那家）。
-        # 只在明確鎖定時注入，系統推測的就不硬塞，以免用猜錯的公司誤導 EAP。
-        scope = " ".join(x for x in (req.company, req.period) if x)
-        # 判斷是不是「比較題」：問題已點名鎖定以外的其他公司，或帶比較字眼。
-        # 比較題不能用「只針對X、不要提及其他公司」——那會跟比較意圖打架，導致 EAP 回「查不到」。
-        others = [c for c in list_companies() if c != req.company
-                  and (c in original or (_short_name(c) and _short_name(c) in original))]
-        is_compare = bool(others) or bool(re.search(r"比較|相比|對比|對照|vs|誰|哪一?家|哪個", original, re.I))
-        if scope and is_compare:
-            q = f"請以「{scope}」為主要對象回答，可與問題中提到的其他公司比較：{original}"
-        elif scope:
-            q = f"請只針對「{scope}」回答，不要提及其他公司：{original}"
-        else:
-            q = original
-        # 同義詞增補：各家指標用詞不一（國泰「淨利差」vs 玉山「淨利息收益率」都是 NIM），
-        # 把別名一併告訴 EAP，避免它因用詞不同而回「查不到」。
-        aliases = _metric_aliases(original)
-        alias_hint = f"（此指標的常見別名：{'、'.join(aliases)}，任一名稱的數據皆可採用）" if aliases else ""
-        if alias_hint:
-            q += alias_hint
-        focus = (original + alias_hint) if is_compare else None
-        # 問到圖表時，EAP 只回「畫圖指令」卻常漏掉數字。明確要它先用表格列出各期數值，
-        # 我們才能用「EAP 自己的數據」把圖畫出來，讓圖和它的答案一致。
-        if re.search(r"圖|chart|長條|直條|趨勢|走勢|各期|視覺化|bar", q, re.I):
-            q += "\n\n（若要呈現圖表，請務必先用 markdown 表格完整列出各期的數值，再附上圖表。）"
+        from eap_client import ask_smart, get_or_create_chat
+        q, original, focus = _build_eap_question(req, company, period)
         try:
             chat_id = get_or_create_chat()
             # 比較題把使用者真正問的指標（含同義詞）帶進去逐家查，避免被寫死的績效清單漏掉（如 NIM）
             answer = ask_smart(chat_id, q, list_companies(), focus=focus)
         except Exception as e:
             raise HTTPException(502, f"EAP 平台連線失敗：{e}")
-        # 優先用 EAP 答案裡的資料表畫圖；沒有才退回我們的 Graph RAG
-        answer, bar = _eap_chart_from_directive(answer, company, period)
-        resp = {"answer": answer, "route": "EAP", "calc_result": None, "sources": [],
-                "company": company, "period": period, "last_period": req.last_period}
-        if bar:
-            resp["chart_bar"] = bar
-        # 交叉驗證：EAP 的數字跟本地知識庫差太多就標出來提醒
-        try:
-            gaps = cross_check_eap(answer, period)
-            if gaps:
-                resp["cross_check"] = gaps
-        except Exception:
-            pass  # 交叉驗證只是加值提醒，出錯不能影響主回答
-        # EAP 撈不到、但本地有料時給一條退路。兩邊的知識庫是各自獨立的：
-        # EAP 只有你在它後台上傳的簡報，法說會逐字稿是我們自己 STT 轉的、只存在本地。
-        # 所以「EAP 查不到」很常見的原因是資料根本不在它那邊，而不是問題不好。
-        # EAP 撈不到時，改用「本地檢索 ＋ EAP 生成」再試一次（見 _augment_with_local）。
-        # 兩邊的知識庫是各自獨立的：EAP 只有你在它後台上傳的簡報，法說會逐字稿是我們自己
-        # STT 轉的、只存在本地。所以「EAP 查不到」很常見的原因是資料不在它那邊，不是問題不好。
-        try:
-            if _eap_found_nothing(answer):
-                ctx = _local_context(original, company, period)
-                if ctx:
-                    aug = _augment_with_local(original, ctx)
-                    if aug:
-                        resp["answer"] = aug
-                        resp["route"] = "EAP_RAG"
-                        resp["sources"] = ctx["sources"]
-                    else:
-                        # 連補了資料都答不出來 → 留一條完全走本地的退路
-                        resp["local_fallback"] = {
-                            "question": original, "company": company,
-                            "period": period, "source": ctx["label"],
-                        }
-        except Exception:
-            pass  # 補強只是加值，出錯不能影響 EAP 的主回答
-        return resp
+        return _finalize_eap(answer, original, company, period, req.last_period)
 
     result = answer_question(
         req.question,
@@ -952,6 +968,133 @@ def chat(req: ChatRequest):
     result["period"] = period
     result["last_period"] = req.last_period
     return result
+
+
+def _local_finalize(result, company, period, last_period):
+    """本地路徑的收尾：附上趨勢圖與實際採用的公司／期間。"""
+    cr = result.get("calc_result")
+    if cr and cr.get("metric") and is_cross_comparable(cr["metric"]):
+        t = trend(company=company, metric=cr["metric"])
+        if len(t.get("points", [])) >= 2:
+            result["chart"] = t
+    result["company"] = company
+    result["period"] = period
+    result["last_period"] = last_period
+    return result
+
+
+def _sse(event_type, **fields):
+    """組一則 SSE 事件。前端靠 type 決定要更新進度、續寫文字，還是收尾。"""
+    return "data: " + json.dumps({"type": event_type, **fields}, ensure_ascii=False) + "\n\n"
+
+
+def _with_live_progress(fn, **kwargs):
+    """在背景執行緒跑 fn，即時 yield 它回報的進度（已包成 SSE 事件）；
+    用 `yield from` 取得 fn 的回傳值。
+
+    fn 是同步函式（prepare_answer），若在主執行緒直接跑完再排空進度，
+    所有進度會在結束того一瞬間才一起送出——使用者盯著「查詢中…」好幾秒，
+    然後三行進度一閃而過，等於沒做。丟到執行緒跑、主線邊等邊送才是真的即時。
+    """
+    import queue
+    box, q = {}, queue.Queue()
+
+    def worker():
+        try:
+            box["value"] = fn(progress=q.put, **kwargs)
+        except Exception as exc:
+            box["error"] = exc
+        finally:
+            q.put(None)          # 結束訊號
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    while True:
+        item = q.get()
+        if item is None:
+            break
+        yield _sse("status", text=item)
+    t.join()
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+@app.post("/api/chat/stream")
+def chat_stream(req: ChatRequest):
+    """逐字串流版的問答。
+
+    為什麼要做：EAP 一題要 10~20 秒，本地生成也要好幾秒，原本這段時間畫面只有
+    「AI 查詢中…」，使用者無從判斷是在跑還是當掉。改成串流後，檢索階段先回報進度，
+    生成階段逐字吐出來，等待的體感差很多。
+
+    事件格式（SSE）：
+      status —— 進度描述，如「檢索法說會內容中…」
+      delta  —— 新增的文字片段，前端往答案後面接
+      done   —— 收尾，帶上圖表／來源／交叉驗證等中繼資料
+      error  —— 出錯訊息
+
+    刻意不用 EventSource：它只支援 GET，問題會被塞進網址。這裡用 POST ＋
+    fetch 的 ReadableStream 讀，前端一樣簡單。
+    """
+    company = req.company or _infer_company(req.question)
+    period = req.period or _infer_period(req.question, company)
+
+    def gen():
+        try:
+            if req.use_eap:
+                from eap_client import ask_smart_stream, get_or_create_chat
+                q, original, focus = _build_eap_question(req, company, period)
+                yield _sse("status", text="連線 EAP 平台…")
+
+                sent = ""
+                for kind, value in ask_smart_stream(chat_id=get_or_create_chat(), question=q,
+                                                    known_companies=list_companies(), focus=focus):
+                    if kind == "status":
+                        yield _sse("status", text=value)
+                        continue
+                    # EAP 送的是累積快照，算出增量才能讓前端用「續寫」的方式呈現
+                    if value.startswith(sent):
+                        delta, sent = value[len(sent):], value
+                    else:
+                        delta, sent = value, value        # 內容被改寫過就整段重送
+                        yield _sse("reset")
+                    if delta:
+                        yield _sse("delta", text=delta)
+
+                yield _sse("status", text="整理圖表與交叉驗證…")
+                resp = _finalize_eap(sent, original, company, period, req.last_period)
+            else:
+                from agent_router import generate_stream, prepare_answer
+                prepared = yield from _with_live_progress(
+                    prepare_answer, question=req.question, company=company,
+                    this_period=period, last_period=req.last_period)
+
+                if prepared["answer"] is not None:
+                    # CALC 捷徑：答案是公式算出來的，沒有可串流的生成過程
+                    yield _sse("delta", text=prepared["answer"])
+                    answer = prepared["answer"]
+                else:
+                    parts = []
+                    for chunk in generate_stream(prepared["prompt"]):
+                        parts.append(chunk)
+                        yield _sse("delta", text=chunk)
+                    answer = "".join(parts)
+
+                resp = _local_finalize(
+                    {"answer": answer, "route": prepared["route"],
+                     "calc_result": prepared["calc_result"], "sources": prepared["sources"]},
+                    company, period, req.last_period)
+
+            # 收尾的答案可能跟串流出來的不同（EAP 補強會整段換掉），一併送回讓前端覆寫
+            yield _sse("done", payload=resp)
+        except Exception as e:
+            yield _sse("error", text=str(e))
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",   # 擋掉反向代理的緩衝，否則串流會被整段憋到最後才吐
+    })
 
 
 @app.get("/api/sources")

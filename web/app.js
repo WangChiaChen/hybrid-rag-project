@@ -744,31 +744,92 @@ async function sendChat() {
     : "";
 
   appendMsg("me", scopeTag + escapeHtml(q));
-  const thinking = appendMsg("bot thinking", "AI 查詢中…");
+  // 串流訊息泡泡：先放進度，收到第一個字就換成答案本文
+  const live = appendMsg("bot", '<div class="stream-status">AI 查詢中…</div><div class="bot-text"></div>');
+  const statusEl = live.querySelector(".stream-status");
+  const textEl = live.querySelector(".bot-text");
+  let answer = "";
+
+  // EAP 的 SSE 實測不是逐字送的，會沉默十幾秒再一次吐完。
+  // 補一個「已等待 N 秒」的計時，讓使用者知道系統還活著而不是當掉。
+  // 宣告在 try 外面，出錯時 catch 才清得掉，否則計時器會一直跑下去。
+  let waited = 0, label = "AI 查詢中…";
+  const tick = setInterval(() => {
+    waited += 1;
+    if (statusEl.isConnected) statusEl.textContent = `${label}（${waited} 秒）`;
+  }, 1000);
 
   try {
     // 有鎖定範圍就帶公司／期間；否則交給後端從問題文字自動辨識
     const body = { question: q, use_eap: $("chatEap").checked };
     if (lockCompany) body.company = lockCompany;
     if (lockPeriod) body.period = lockPeriod;
-    const r = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+
+    const d = await streamChat(body, {
+      onStatus: (t) => { label = t; waited = 0; statusEl.textContent = t; },
+      onDelta: (t) => {
+        if (!answer) { clearInterval(tick); statusEl.remove(); }   // 開始吐字就把進度收掉
+        answer += t;
+        // 串流過程用純文字呈現（Markdown 只寫到一半會渲染成亂的），收尾再整段轉 Markdown
+        textEl.textContent = answer;
+        $("chat-log").scrollTop = $("chat-log").scrollHeight;
+      },
+      onReset: () => { answer = ""; textEl.textContent = ""; },
     });
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-    const d = await r.json();
-    thinking.remove();
+    clearInterval(tick);
+
+    live.remove();                                // 換成完整版（含徽章、圖表、來源）
     const fig = renderAnswer(d);
     // 連同圖（趨勢折線或 EAP 長條）一起存，匯出報告時轉成 PNG 嵌進去
     chatHistory.push({ question: q, answer: d.answer, fig: fig || null });
     // 記住後端實際採用的公司／期間，給匯出報告用
     if (d.company) chatCtx = { company: d.company, period: d.period || chatCtx.period, last_period: d.last_period || null };
   } catch (e) {
-    thinking.remove();
+    live.remove();
     $("chat-error").textContent = `查詢失敗：${e.message}`;
     $("chat-error").classList.remove("hidden");
+  } finally {
+    clearInterval(tick);
   }
+}
+
+
+// 讀 /api/chat/stream 的 SSE。用 fetch 的 ReadableStream 而不是 EventSource——
+// EventSource 只支援 GET，問題會被塞進網址列。
+// 回傳最終的完整結果（done 事件的 payload）。
+async function streamChat(body, { onStatus, onDelta, onReset }) {
+  const r = await fetch("/api/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "", done = null;
+
+  while (true) {
+    const { value, done: finished } = await reader.read();
+    if (finished) break;
+    buf += decoder.decode(value, { stream: true });
+    // SSE 以空行分隔事件；最後一段可能只收到一半，留在 buf 等下一輪
+    const events = buf.split("\n\n");
+    buf = events.pop();
+    for (const ev of events) {
+      const line = ev.split("\n").find((l) => l.startsWith("data: "));
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line.slice(6)); } catch { continue; }
+      if (msg.type === "status") onStatus(msg.text);
+      else if (msg.type === "delta") onDelta(msg.text);
+      else if (msg.type === "reset") onReset();
+      else if (msg.type === "error") throw new Error(msg.text);
+      else if (msg.type === "done") done = msg.payload;
+    }
+  }
+  if (!done) throw new Error("串流中斷，沒有收到完整結果");
+  return done;
 }
 
 function renderAnswer(d) {

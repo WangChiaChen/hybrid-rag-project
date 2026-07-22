@@ -59,21 +59,19 @@ def get_or_create_chat():
     return create_chat()
 
 
-def ask_question(chat_id, question, streaming=True):
-    """POST /assistant/chat/{chat_id} —— 送出問題，取得回答
-    平台建議用 streaming=True，避免問題複雜時逾時（504）
+def stream_question(chat_id, question):
+    """POST /assistant/chat/{chat_id} —— 送出問題，逐段 yield 目前已產生的完整答案。
+
+    平台的 SSE 每則事件送的是「到目前為止的完整答案」（累積快照），不是增量片段，
+    所以這裡照樣 yield 快照，由呼叫端決定要整段用還是自己算差集。
     """
-    data = {"q": question, "streaming": streaming}
+    data = {"q": question, "streaming": True}
     response = requests.post(
         f"{EAP_BASE_URL}/assistant/chat/{chat_id}",
-        headers=_headers(), json=data, stream=streaming,
+        headers=_headers(), json=data, stream=True,
     )
     response.raise_for_status()
 
-    if not streaming:
-        return response.json().get("result", "")
-
-    final_result = ""
     for line in response.iter_lines():
         if not line:
             continue
@@ -84,9 +82,25 @@ def ask_question(chat_id, question, streaming=True):
                 try:
                     parsed = json.loads(json_str)
                     if "result" in parsed:
-                        final_result = parsed["result"]
+                        yield parsed["result"]
                 except json.JSONDecodeError:
                     pass
+
+
+def ask_question(chat_id, question, streaming=True):
+    """送出問題，等它講完再一次回傳完整答案。
+    平台建議用 streaming=True，避免問題複雜時逾時（504）。
+    """
+    if not streaming:
+        data = {"q": question, "streaming": False}
+        response = requests.post(
+            f"{EAP_BASE_URL}/assistant/chat/{chat_id}", headers=_headers(), json=data)
+        response.raise_for_status()
+        return response.json().get("result", "")
+
+    final_result = ""
+    for snapshot in stream_question(chat_id, question):
+        final_result = snapshot
     return final_result
 
 
@@ -122,19 +136,39 @@ def ask_smart(chat_id, question, known_companies, streaming=True, focus=None):
     逐家查，沒給才退回泛用的績效重點——否則像 NIM、資本適足率這種問題，會被寫死的
     「淨利／EPS／ROE」清單漏掉，導致明明有資料卻回「查不到」。
     """
+    final = ""
+    for kind, value in ask_smart_stream(chat_id, question, known_companies, focus=focus):
+        if kind == "text":
+            final = value
+    return final
+
+
+def ask_smart_stream(chat_id, question, known_companies, focus=None):
+    """ask_smart 的串流版，yield (kind, value)：
+        ("status", 說明文字)   —— 目前在做什麼，讓呼叫端即時回報給使用者
+        ("text",   累積快照)   —— 到目前為止的完整答案
+
+    為什麼用帶標籤的事件而不是 progress 回呼：多公司比較要先逐家查一輪才能合成，
+    那一輪不會產生任何答案快照。若進度走回呼、答案走 yield，進度就會卡到下一次
+    yield 才流出去，使用者眼中還是一片空白。統一成事件流才能真正即時。
+
+    ask_smart 只是把最後一個 text 快照收下來，兩邊共用同一套邏輯與提示詞。
+    """
     companies = detect_companies_in_question(question, known_companies)
     if len(companies) < 2:
-        return ask_question(chat_id, question, streaming)
+        for snapshot in stream_question(chat_id, question):
+            yield "text", snapshot
+        return
 
     ask_for = (focus or "").strip() or "最近一季的績效重點（稅後淨利、每股盈餘EPS、股東權益報酬率ROE、主要成長率等）"
     facts = []
-    for c in companies:
+    for i, c in enumerate(companies, 1):
+        yield "status", f"EAP 逐家查詢中（{i}/{len(companies)}）：{c}"
         sub_q = (
             f"請只查詢並回答「{c}」，只回答這一家、不要提到其他公司。"
             f"請針對以下問題查出「{c}」的對應數字（若有指定指標與期間，以其為準）：{ask_for}"
         )
-        ans = ask_question(chat_id, sub_q, streaming)
-        facts.append(f"【{c}】\n{ans.strip()}")
+        facts.append(f"【{c}】\n{ask_question(chat_id, sub_q).strip()}")
 
     combined = "\n\n".join(facts)
     synth_q = (
@@ -143,7 +177,9 @@ def ask_smart(chat_id, question, known_companies, streaming=True, focus=None):
         "不得直接比較原始數字大小，應優先用比率／每股／成長率等單位一致的指標比較。\n\n"
         f"{combined}\n\n原始問題：{question}"
     )
-    return ask_question(chat_id, synth_q, streaming)
+    yield "status", "彙整各家數據、進行比較…"
+    for snapshot in stream_question(chat_id, synth_q):
+        yield "text", snapshot
 
 
 if __name__ == "__main__":
