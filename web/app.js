@@ -411,7 +411,8 @@ function cmpTable(rows, a, b, mode) {
   const head = isAmount
     ? `<tr><th>指標</th><th>${a}<small>億元</small></th><th>${b}<small>億元</small></th><th>原始申報單位</th></tr>`
     : `<tr><th>指標</th><th>${a}</th><th>${b}</th></tr>`;
-  return `<table class="cmp-table"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+  // 包一層捲動容器：窄螢幕由容器橫捲，表格本身維持正常的 table 排版（欄寬才對得齊）
+  return `<div class="table-scroll"><table class="cmp-table"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
 }
 
 // 標準比率對照表。每列附上「實際對應到的原始欄位」，滑鼠移上去看得到——
@@ -436,9 +437,9 @@ function standardBlock(rows, a, b) {
       <span class="count">跨機構定義對齊　·　名稱不同也配得起來　·　滑到「對齊」看對應欄位</span></div>
     <div class="std-note">ROE、ROA、NIM 這類標準比率各家用詞不一（如「9M25 ROE」vs「ROE」），
       逐字比對配不起來，改用<strong>人工維護的標準定義字典</strong>對齊；<strong>資產負債率</strong>等衍生比率則由財報金額即時計算。</div>
-    <table class="cmp-table std-table">
+    <div class="table-scroll"><table class="cmp-table std-table">
       <thead><tr><th>標準比率</th><th>${a}</th><th>${b}</th><th>單位</th></tr></thead>
-      <tbody>${body}</tbody></table>`;
+      <tbody>${body}</tbody></table></div>`;
 }
 
 function renderCompare(d) {
@@ -1057,9 +1058,9 @@ function renderSourceDetail(d) {
     sec.innerHTML = `
       <div class="group-head"><span class="dot"></span><h3>${c}</h3>
         <span class="n">${rows.length} 期　·　指標 ${cMetrics}　·　語意段落 ${cNarr}</span></div>
-      <table class="cmp-table src-table">
+      <div class="table-scroll"><table class="cmp-table src-table">
         <thead><tr><th>期間</th><th>指標數</th><th>語意段落</th><th>指標量</th></tr></thead>
-        <tbody>${body}</tbody></table>`;
+        <tbody>${body}</tbody></table></div>`;
     box.appendChild(sec);
   });
 }
@@ -1173,10 +1174,44 @@ function pollUpload(jobId) {
   }, 1500);
 }
 
+// ---------- 冷啟動提示 ----------
+// Render 免費方案的服務閒置會休眠，第一個請求要等 50 秒以上才醒得過來。
+// 沒有提示的話畫面就是一片空白，看的人只會以為壞了——現場展示時這一下就毀了。
+// 作法：先打一個輕量的 /api/health，超過 2.5 秒還沒回應就跳出橫幅安撫，回來了再收掉。
+function showWaking(msg) {
+  let el = document.getElementById("waking");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "waking";
+    el.className = "waking";
+    document.body.appendChild(el);
+  }
+  el.innerHTML = msg;
+  el.classList.remove("hidden");
+}
+
+function hideWaking() {
+  document.getElementById("waking")?.classList.add("hidden");
+}
+
+async function waitForBackend() {
+  const slow = setTimeout(() => showWaking(
+    '<span class="waking-dot"></span>服務喚醒中，約需 30–60 秒…' +
+    '<small>雲端免費方案閒置後會休眠，第一次連線需要等它啟動，之後就很快了</small>'
+  ), 2500);
+  try {
+    await api("/api/health");
+  } finally {
+    clearTimeout(slow);
+    hideWaking();
+  }
+}
+
 // ---------- 啟動 ----------
 (async () => {
   try {
     initUpload();
+    await waitForBackend();
     COMPANIES = await api("/api/companies");
     if (!COMPANIES.length) return showError("知識庫是空的");
     fillSelect($("company"), COMPANIES.map((c) => c.name));
@@ -1189,6 +1224,7 @@ function pollUpload(jobId) {
     initCompare();
     initChat();
   } catch (e) {
+    hideWaking();
     showError(`無法連線到 API：${e.message}　（後端有啟動嗎？）`);
   }
 })();
