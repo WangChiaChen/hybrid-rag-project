@@ -819,6 +819,23 @@ footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height
 .chat-input input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
 .chat-input .btn-primary { padding: 0 22px; }
 
+/* ---------- 無法驗證的回答 ---------- */
+/* 用琥珀色而不是紅色：紅色是「數字對不上」（cross-warn），我們有證據說它不一致；
+   這裡只是「驗不了」，沒有證據說它錯，語氣要有分別。 */
+.unverified {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #7A5410;
+  background: #FDF6E3;
+  border: 1px solid #EDD9A3;
+  border-left: 3px solid #C9932A;
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.unverified-head { font-weight: 700; margin-bottom: 6px; }
+.unverified-body { margin: 0; line-height: 1.65; }
+.unverified-foot { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.55; }
+
 /* ---------- 載入骨架 ---------- */
 /* 冷啟動時後端要 30-60 秒才醒。先畫出卡片輪廓，使用者知道版面長什麼樣、
    也知道系統在跑，而不是面對一片空白猜是不是壞了。 */

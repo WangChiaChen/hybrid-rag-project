@@ -641,16 +641,20 @@ def _num_near_metric(segment, spec):
 
 def _cross_check_prose(answer, fallback_period):
     """純文字（非表格）答案的交叉驗證：把文中每家公司講到的標準指標數字，跟本地知識庫比。
-    以「公司名出現的位置」把文字切段，各段內找指標與數值配對——EAP 常一句話講一家，切段夠用。"""
+    以「公司名出現的位置」把文字切段，各段內找指標與數值配對——EAP 常一句話講一家，切段夠用。
+
+    回傳 (不一致清單, 實際比對過幾筆)。要回報比對數，是因為「0 筆不一致」有兩種意思：
+    比對過而且都吻合，或者根本沒東西可比。後者代表這個答案我們驗不了，得誠實講。
+    """
     text = str(answer)
     # 純文字用「完整公司名」比對就好——用簡稱會誤撞（如「第一」金控 vs「第一季」）。
     # EAP 的答案幾乎都寫全名，全名對不到頂多漏報，總比誤報一家不相干的公司好。
     positions = [(text.find(c), c) for c in list_companies() if text.find(c) >= 0]
     positions.sort()
     if not positions:
-        return []
+        return [], 0
 
-    out = []
+    out, checked = [], 0
     for i, (pos, c) in enumerate(positions):
         end = positions[i + 1][0] if i + 1 < len(positions) else len(text)
         segment = text[pos:end]
@@ -669,6 +673,7 @@ def _cross_check_prose(answer, fallback_period):
         if not pick:
             continue
         local_val = round(pick["value"], 2)
+        checked += 1
         if _significant_gap(eap_val, local_val):
             out.append({
                 "company": c,
@@ -678,11 +683,12 @@ def _cross_check_prose(answer, fallback_period):
                 "local_value": local_val,
                 "local_source": pick["name"],
             })
-    return out
+    return out, checked
 
 
 def cross_check_eap(answer, fallback_period):
-    """比對 EAP 答案中的標準指標數字與本地知識庫，回傳不一致清單。
+    """比對 EAP 答案中的標準指標數字與本地知識庫。
+    回傳 (不一致清單, 實際比對過幾筆)。
     有表格就比表格（較可靠）；沒表格則退回逐句解析純文字答案。"""
     rows = []
     for ln in str(answer).split("\n"):
@@ -699,9 +705,9 @@ def cross_check_eap(answer, fallback_period):
     # 哪幾欄是「標準指標的數值欄」——看表頭認得出指標的才算
     col_spec = {i: _spec_for_text(header[i]) for i in range(len(header))}
     if not any(col_spec.values()):
-        return []
+        return [], 0
 
-    out = []
+    out, checked = [], 0
     for r in body:
         company = next((rc for rc in (_resolve_company(c) for c in r) if rc), None)
         if not company:
@@ -727,6 +733,7 @@ def cross_check_eap(answer, fallback_period):
             if not pick:
                 continue
             local_val = round(pick["value"], 2)
+            checked += 1
             if _significant_gap(eap_val, local_val):
                 out.append({
                     "company": company,
@@ -736,7 +743,7 @@ def cross_check_eap(answer, fallback_period):
                     "local_value": local_val,
                     "local_source": pick["name"],
                 })
-    return out
+    return out, checked
 
 
 def _metric_aliases(text):
@@ -915,8 +922,9 @@ def _finalize_eap(answer, original, company, period, last_period):
     if bar:
         resp["chart_bar"] = bar
     # 交叉驗證：EAP 的數字跟本地知識庫差太多就標出來提醒
+    checked = 0
     try:
-        gaps = cross_check_eap(answer, period)
+        gaps, checked = cross_check_eap(answer, period)
         if gaps:
             resp["cross_check"] = gaps
     except Exception:
@@ -941,6 +949,23 @@ def _finalize_eap(answer, original, company, period, last_period):
                     }
     except Exception:
         pass  # 補強只是加值，出錯不能影響 EAP 的主回答
+
+    # 第四道防護：EAP 講得頭頭是道，但我們一條都驗不了。
+    # 實測遇過——問「為什麼基金手續費下滑」，EAP 列出三條理由（市場波動、銷售動能趨緩、
+    # 資產配置轉移），看起來很專業，但本地全庫沒有任何一段提到原因，那三條是生成的。
+    # 前三道防護都攔不住這種：它「有回答」所以不觸發補強，通篇沒數字所以交叉驗證無從比對。
+    # 這裡不斷言 EAP 錯（它的知識庫可能真有我們沒有的資料），只誠實說「我們驗不了」，
+    # 跟「單位未標示」「累計值跨季不可比」是同一個原則。
+    try:
+        if resp["route"] == "EAP" and not _eap_found_nothing(resp["answer"]):
+            if checked == 0 and _local_context(original, company, period) is None:
+                resp["unverified"] = {
+                    "reason": "沒有可對應的數據或法說會內容",
+                    "company": company,
+                    "period": period,
+                }
+    except Exception:
+        pass
     return resp
 
 

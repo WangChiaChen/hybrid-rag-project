@@ -943,6 +943,20 @@ function renderAnswer(d) {
     </div>`;
   }
 
+  // EAP 給了答案，但我們一條都驗不了。實測遇過 EAP 對「為什麼下滑」列出三條看似
+  // 專業的理由，而本地全庫根本沒有提到原因——那是生成的。這裡不斷言它錯，只誠實揭露
+  // 「無法驗證」，讓使用者知道這段話不該直接拿去做決策。
+  if (d.unverified) {
+    html += `<div class="unverified">
+      <div class="unverified-head">⚠ 此回答無法以本地知識庫驗證</div>
+      <p class="unverified-body">EAP 平台給出了答案，但${escapeHtml(d.unverified.company)}
+        ${escapeHtml(d.unverified.period)} 的本地知識庫中${escapeHtml(d.unverified.reason)}，
+        因此系統無法比對任何一項說法或數字。</p>
+      <div class="unverified-foot">這不代表 EAP 的答案有誤——它的知識庫可能有我們沒收錄的資料。
+        但在能查證之前，請勿直接引用於投資決策。</div>
+    </div>`;
+  }
+
   // 這題 EAP 原本查不到，是我們補了本地資料它才答得出來——講清楚，不要讓人以為平台本來就有。
   if (d.route === "EAP_RAG") {
     html += `<div class="local-hint">
