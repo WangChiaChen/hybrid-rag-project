@@ -43,6 +43,8 @@ body {
 
 /* ---------- Nav：選中狀態要夠明確，使用者要知道自己在哪一層 ---------- */
 .nav { background: var(--card); border-bottom: 1px solid var(--border); }
+/* 捲動提示只有窄螢幕用得到；桌機四個頁籤排得下，漸層蓋在最後一個上面反而礙眼 */
+.nav-fade { display: none; }
 .nav-inner { display: flex; gap: 2px; }
 .nav button {
   font-family: var(--font);
@@ -934,15 +936,39 @@ footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height
 @media (max-width: 768px) {
   .wrap { padding: 0 14px; }
 
-  /* 分析期間 vs 比較期間、機構 A vs 機構 B 這種並排，窄螢幕改直排 */
+  /* 窄螢幕改直排，但「兩個期間」維持並排——它們是一組對照，拆開會看不出關係，
+     而且各佔一列會把首屏吃掉。實測 390px：全部直排時篩選器高 356px，核心指標要捲到
+     765px 才看得到（視窗才 844px）；期間並排後省下約 130px。 */
   .controls { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px; }
-  .compare-group { flex-direction: column; align-items: stretch; }
-  .controls .vs, .compare-group .vs { align-self: center; }
-  .controls select, .compare-group select { width: 100%; }
+  .controls > .field select { width: 100%; }
 
-  /* 分頁列改成可橫向捲動，標籤才不會被壓到看不清 */
-  .nav-inner { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .compare-group { flex-direction: row; align-items: flex-end; gap: 8px; }
+  .compare-group .field { flex: 1 1 0; min-width: 0; }
+  /* min-width:152px 在 390px 上會讓兩個選單擠不下而換行，等於白做 */
+  .compare-group select { width: 100%; min-width: 0; }
+  .compare-group .vs { flex: 0 0 auto; align-self: flex-end; margin-bottom: 9px; }
+
+  /* 分頁列改成可橫向捲動，標籤才不會被壓到看不清。
+     內容 509px、可視只有 390px，第四個頁籤「資料來源總覽」整個在畫面外——
+     沒有提示的話看起來就只是被裁掉，使用者不會想到可以滑。右緣加漸層當作可滑動的線索，
+     滑到底就收起來（.at-end 由 app.js 掛上）。 */
+  .nav { position: relative; }
+  .nav-inner { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .nav-inner::-webkit-scrollbar { display: none; }
   .nav-inner button { white-space: nowrap; }
+  /* 漸層用真的元素而不是 ::after：偽元素的狀態沒辦法可靠地量測（getComputedStyle
+     對 ::after 讀不到 class 切換後的值），真元素才驗得起來。 */
+  .nav-fade {
+    display: block;
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    width: 36px;
+    pointer-events: none;          /* 純提示，不能擋住底下的頁籤 */
+    background: linear-gradient(to right, rgba(255, 255, 255, 0), var(--card));
+    transition: opacity .18s ease;
+    opacity: 1;
+  }
+  .nav.at-end .nav-fade { opacity: 0; }
 
   /* 門面數字在手機上不需要 38px 那麼大 */
   .hero .card .val { font-size: 30px; }

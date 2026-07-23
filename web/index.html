@@ -6,7 +6,7 @@
 <title>有你蒸好 · 財報分析</title>
 <!-- ?v= 是版本參數：改完前端要記得 +1。沒有它的話瀏覽器會拿快取裡的舊 app.js，
      重新部署後打開仍是舊畫面（改完 Ctrl+F5 才看得到），現場展示很容易踩到。 -->
-<link rel="stylesheet" href="/style.css?v=15">
+<link rel="stylesheet" href="/style.css?v=19">
 <!-- Plotly 走 CDN：不用 npm、不用打包，改完存檔重整就看得到 -->
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
@@ -15,7 +15,7 @@
 <header class="site-header">
   <div class="wrap brand">
     <h1>財報分析，有你真好</h1>
-    <span class="tag">有你蒸好 ｜ Hybrid RAG：Vector RAG ＋ Graph RAG ＋ AI Agent 路由</span>
+    <span class="tag">有你蒸好 ｜ Hybrid RAG：Vector RAG ＋ 結構化指標庫 ＋ AI Agent 路由</span>
   </div>
 </header>
 
@@ -26,6 +26,9 @@
     <button data-tab="chat">問答與報告</button>
     <button data-tab="sources">資料來源總覽</button>
   </div>
+  <!-- 手機上分頁列要橫向捲動，這條漸層是「右邊還有頁籤」的線索；
+       桌機寬度用不到，CSS 只在 ≤768px 顯示它。 -->
+  <span class="nav-fade" aria-hidden="true"></span>
 </nav>
 
 <main class="wrap">
@@ -71,7 +74,9 @@
 
     <div class="section-head">
       <h2>各項指標</h2>
-      <span class="count">依財務意義分組　·　滑鼠移到卡片上可看六期趨勢</span>
+      <!-- 原本寫「滑鼠移到卡片上」，但手機沒有 hover——程式早就補了點擊
+           （見 app.js 的觸控支援），文案卻還停在只有滑鼠的年代。 -->
+      <span class="count">依財務意義分組　·　點卡片看六期趨勢</span>
     </div>
     <div id="groups"></div>
 
@@ -224,10 +229,10 @@
 
   <footer>
     資料來源：公開資訊觀測站 · 各公司投資人關係網站　｜
-    數值由 Graph RAG 以公式計算，非 LLM 生成
+    數值由指標庫以公式計算，非 LLM 生成
   </footer>
 </main>
 
-<script src="/app.js?v=15"></script>
+<script src="/app.js?v=19"></script>
 </body>
 </html>

@@ -4,9 +4,20 @@
 const $ = (id) => document.getElementById(id);
 let COMPANIES = [];
 
+// 後端出錯時回的是 {"detail": "中文說明"}。直接把整包 JSON 丟給使用者看，畫面上會出現
+// 429 {"detail":"請求太頻繁…"} 這種東西——訊息本身是寫給人看的，別讓它裹著一層 JSON。
+async function httpError(r) {
+  const body = await r.text();
+  try {
+    const detail = JSON.parse(body).detail;
+    if (detail) return new Error(detail);
+  } catch (_) { /* 不是 JSON 就照原樣顯示 */ }
+  return new Error(`${r.status} ${body}`);
+}
+
 async function api(path) {
   const r = await fetch(path);
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  if (!r.ok) throw await httpError(r);
   return r.json();
 }
 
@@ -18,6 +29,24 @@ function showError(msg) {
 
 const num = (v) => parseFloat(String(v).replace(/,/g, "").replace(/[（(]/, "-").replace(/[）)]/, ""));
 
+// 手機上分頁列是橫向捲動的（內容 509px、可視 390px），第四個頁籤整個在畫面外。
+// 右緣的漸層是「還有東西可以滑」的線索，滑到底就收起來——否則使用者會以為頁籤被裁掉了。
+// CSS 沒辦法知道捲動位置，所以這裡補一個 class。
+const syncNavHint = (() => {
+  const nav = document.querySelector(".nav");
+  const inner = document.querySelector(".nav-inner");
+  if (!nav || !inner) return () => {};
+  const sync = () => {
+    // 捲不動（桌機寬度）時也算「到底」，漸層就不會平白出現在寬螢幕上
+    const atEnd = inner.scrollLeft + inner.clientWidth >= inner.scrollWidth - 1;
+    nav.classList.toggle("at-end", atEnd);
+  };
+  inner.addEventListener("scroll", sync, { passive: true });
+  window.addEventListener("resize", sync);
+  sync();
+  return sync;
+})();
+
 // ---------- 分頁切換 ----------
 document.querySelectorAll(".nav button").forEach((btn) => {
   btn.onclick = () => {
@@ -27,6 +56,11 @@ document.querySelectorAll(".nav button").forEach((btn) => {
       $(id).classList.toggle("hidden", id !== btn.dataset.tab)
     );
     if (btn.dataset.tab === "sources") initSources();
+    // 切到畫面外的頁籤時把它捲進來，否則點完當前頁籤仍在畫面外，看不出切換到哪了
+    btn.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // 程式觸發的捲動不保證會派送 scroll 事件（實測就有不派送的情況），
+    // 不主動同步的話漸層會停在舊狀態——已經滑到底了卻還在提示「可以再滑」。
+    syncNavHint();
   };
 });
 
@@ -658,7 +692,7 @@ let chartSeq = 0;       // 每則答案的趨勢圖需要唯一 id
 let chatCtx = null;
 
 const ROUTE_BADGE = {
-  CALC: ["精準計算 · Graph RAG", "b-calc"],
+  CALC: ["精準計算 · 指標庫", "b-calc"],
   NARRATIVE: ["語意檢索 · Vector RAG", "b-narr"],
   BOTH: ["雙引擎 · Hybrid RAG", "b-both"],
   EAP: ["EAP 平台回答", "b-both"],
@@ -886,7 +920,7 @@ async function streamChat(body, { onStatus, onDelta, onReset }) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  if (!r.ok) throw await httpError(r);
 
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
@@ -939,7 +973,7 @@ function renderAnswer(d) {
     html += `<div class="cross-warn">
       <div class="cross-warn-head">⚠ 與本地知識庫數字不一致，請留意</div>
       <ul>${rows}</ul>
-      <div class="cross-warn-foot">本地數字由 Graph RAG 直接讀簡報解析而得；EAP 為外部平台回答。兩者對不上時，建議以本地知識庫為準或人工複核。</div>
+      <div class="cross-warn-foot">本地數字由指標庫直接讀簡報解析而得；EAP 為外部平台回答。兩者對不上時，建議以本地知識庫為準或人工複核。</div>
     </div>`;
   }
 
@@ -1093,7 +1127,7 @@ function seriesFigure(cs) {
   return { data, layout };
 }
 
-// EAP 只給「畫長條圖」的指令，數據由後端用 Graph RAG 補上；這裡把它畫成橫向長條圖
+// EAP 只給「畫長條圖」的指令，數據由後端用指標庫補上；這裡把它畫成橫向長條圖
 function barFigure(cb) {
   const items = cb.items.slice(0, 10).reverse();
   return {
@@ -1143,7 +1177,7 @@ async function exportReport() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ company, period, last_period: last, qa }),
     });
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    if (!r.ok) throw await httpError(r);
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1193,7 +1227,7 @@ function renderSourceStats(d) {
   $("src-stats").innerHTML =
     statCard("收錄公司", companies.length, "家") +
     statCard("收錄期間", d.rows.length, "組（公司 × 期間）") +
-    statCard("結構化指標", totalMetrics, "由 Graph RAG 精準計算") +
+    statCard("結構化指標", totalMetrics, "由指標庫精準計算") +
     statCard("語意段落", d.total_narratives, "供 Vector RAG 檢索");
 }
 
@@ -1296,7 +1330,7 @@ async function startUpload() {
   showUpStatus("running", "上傳檔案中…", 0.04);
   try {
     const r = await fetch("/api/upload", { method: "POST", body: fd });
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    if (!r.ok) throw await httpError(r);
     const d = await r.json();
     pollUpload(d.job_id);
   } catch (e) {
