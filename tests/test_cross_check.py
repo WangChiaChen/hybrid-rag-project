@@ -78,6 +78,72 @@ class Test單季與累計不可混比:
         assert "421" in gaps[0]["local_value"], "累計欄應該跟前三季的 421 億比"
 
 
+class Test單位寫法:
+    """讀不到單位就整張表都比不了，畫面上還會顯示「無法驗證」——
+    最該展示防護力的跨公司比較題反而什麼都沒做。以下寫法都是 EAP 實際吐過的。"""
+
+    @pytest.fixture
+    def 金控資料(self, temp_metrics):
+        temp_metrics(COMPANY, "台北測試金控合併稅後淨利", {"2026Q1": "23104"}, unit="百萬元")
+
+    def test_括號裡夾雜其他字(self, 金控資料):
+        """「（億元新台幣）」——原本要求括號裡剛好只有單位，這種就漏掉。"""
+        ans = (f"| 公司 | 2026Q1 合併稅後淨利（億元新台幣） |\n|---|---|\n"
+               f"| {COMPANY} | 131.04 |\n")
+        gaps, checked = cross_check_metrics(ans, COMPANY, "2026Q1")
+        assert checked == 1, "應該讀得出單位並完成比對"
+        assert len(gaps) == 1, "131.04 億 ≠ 23,104 百萬，該報出來"
+
+    def test_單位寫在表格上方那一行(self, 金控資料):
+        """「…如下（單位：億元）：」——單位根本不在表頭裡。"""
+        ans = (f"{COMPANY} 2026Q1 的獲利如下（單位：億元）：\n"
+               f"| 公司 | 合併稅後淨利 |\n|---|---|\n| {COMPANY} | 131.04 |\n")
+        gaps, checked = cross_check_metrics(ans, COMPANY, "2026Q1")
+        assert checked == 1
+        assert len(gaps) == 1
+
+    def test_數字正確時不誤報(self, 金控資料):
+        ans = (f"| 公司 | 2026Q1 合併稅後淨利（億元新台幣） |\n|---|---|\n"
+               f"| {COMPANY} | 231.04 |\n")
+        gaps, checked = cross_check_metrics(ans, COMPANY, "2026Q1")
+        assert checked == 1 and gaps == []
+
+    def test_不可裸抓元字(self):
+        """在整段文字裡裸找「元」會誤中「元大證券」「還原」這類詞。"""
+        from api import _unit_hint
+        assert _unit_hint("元大證券的表現") is None
+        assert _unit_hint("（元）") == "元"
+
+
+class Test名稱釘死別期的不可當基準:
+    """同一份簡報常附去年同期當對照，解析時連標籤一起被收進當期資料夾：
+    國泰 2026Q1 底下就有「國泰世華銀行 1Q25 稅後淨利 = 12.2 十億元」。
+
+    實測 EAP 被問 2026Q1 時，回的正是這批 1Q25 的數字。若拿它當比對基準，
+    我們會回報「一致」——等於幫錯誤背書，比不驗證還糟。
+    """
+
+    @pytest.fixture
+    def 只有去年同期的資料(self, temp_metrics):
+        temp_metrics(COMPANY, "台北測試銀行 1Q25 稅後淨利", {"2026Q1": "12.2"}, unit="十億元")
+
+    def test_不拿去年同期的數字背書(self, 只有去年同期的資料):
+        ans = ("各子公司稅後淨利如下（單位：十億元）：\n"
+               "| 子公司 | 稅後淨利 |\n|---|---|\n| 台北測試銀行 | 12.2 |\n")
+        gaps, checked = cross_check_metrics(ans, COMPANY, "2026Q1")
+        assert checked == 0, "名稱釘死 1Q25，不該被當成 2026Q1 的比對基準"
+        assert gaps == []
+
+    def test_釘死本期的仍可用(self, temp_metrics):
+        """「3M26」釘的就是本期，這種要留著用。"""
+        temp_metrics(COMPANY, "台北測試銀行 3M26 稅後淨利", {"2026Q1": "8762"}, unit="百萬元")
+        ans = ("各子公司稅後淨利如下（單位：億元）：\n"
+               "| 子公司 | 稅後淨利 |\n|---|---|\n| 台北測試銀行 | 99.9 |\n")
+        gaps, checked = cross_check_metrics(ans, COMPANY, "2026Q1")
+        assert checked == 1, "3M26 就是本期，應該拿來比"
+        assert len(gaps) == 1, "99.9 億 ≠ 8,762 百萬"
+
+
 class Test集團層級照舊:
     def test_集團數字錯誤照樣報(self, 集團與子公司資料):
         gaps, _ = cross_check_metrics(
@@ -98,3 +164,45 @@ class Test集團層級照舊:
         gaps, _ = cross_check_metrics(
             f"{COMPANY} 稅後淨利為 10.057 億元。", COMPANY, "2026Q1")
         assert len(gaps) == 1
+
+
+class Test部分驗證的揭露:
+    """「驗過沒問題」和「根本沒驗」在畫面上必須分得出來。
+
+    實測 EAP 答台灣人壽前三季 177 億，本地沒收錄這筆，於是安靜跳過——
+    畫面上跟「四筆全部驗過」長得一模一樣，等於默認了那個沒驗過的數字。
+    """
+
+    def test_驗不了的項目會被記錄(self, temp_metrics):
+        temp_metrics(COMPANY, "台北測試銀行第三季稅後淨利", {PERIOD: "143"}, unit="億元")
+        ans = ("| 子公司 | 2025Q3單季稅後淨利 |\n|---|---|\n"
+               "| 台北測試銀行 | 143億元 |\n| 台北測試人壽 | 105億元 |\n")
+        unmatched = []
+        gaps, checked = cross_check_metrics(ans, COMPANY, PERIOD, unmatched=unmatched)
+        assert gaps == [] and checked == 1, "銀行那筆對得上，應該驗過且無不一致"
+        assert len(unmatched) == 1, "人壽那筆本地沒有，應該被記下來而不是安靜跳過"
+        assert "人壽" in unmatched[0]["company"]
+        assert "105" in unmatched[0]["eap_value"]
+
+    def test_全部都驗得到就沒有未驗項目(self, temp_metrics):
+        temp_metrics(COMPANY, "台北測試銀行第三季稅後淨利", {PERIOD: "143"}, unit="億元")
+        ans = ("| 子公司 | 2025Q3單季稅後淨利 |\n|---|---|\n| 台北測試銀行 | 143億元 |\n")
+        unmatched = []
+        _, checked = cross_check_metrics(ans, COMPANY, PERIOD, unmatched=unmatched)
+        assert checked == 1 and unmatched == []
+
+    def test_不傳清單也不會壞(self, temp_metrics):
+        """unmatched 是選填的——多數呼叫端不需要這份清單。"""
+        temp_metrics(COMPANY, "台北測試銀行第三季稅後淨利", {PERIOD: "143"}, unit="億元")
+        ans = ("| 子公司 | 2025Q3單季稅後淨利 |\n|---|---|\n| 台北測試人壽 | 105億元 |\n")
+        gaps, checked = cross_check_metrics(ans, COMPANY, PERIOD)
+        assert gaps == [] and checked == 0
+
+    def test_已經報成不一致的不重複列為未驗(self, temp_metrics):
+        """同一筆不該同時出現在紅框和「驗不了」清單裡。"""
+        temp_metrics(COMPANY, "台北測試銀行第三季稅後淨利", {PERIOD: "143"}, unit="億元")
+        ans = ("| 子公司 | 2025Q3單季稅後淨利 |\n|---|---|\n| 台北測試銀行 | 243億元 |\n")
+        unmatched = []
+        gaps, _ = cross_check_metrics(ans, COMPANY, PERIOD, unmatched=unmatched)
+        assert len(gaps) == 1
+        assert unmatched == []

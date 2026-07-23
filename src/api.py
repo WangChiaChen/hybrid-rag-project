@@ -831,6 +831,53 @@ def _is_cumulative_text(text):
     return None
 
 
+# 單位的寫法比想像中雜。實測 EAP 出現過：
+#   「2026Q1 合併稅後淨利（億元新台幣）」  ← 括號裡不只單位
+#   「（單位：十億元）」寫在表格上方那一行，根本不在表頭
+# 原本要求「括號裡剛好只有單位」，這三種全部漏掉，於是整張表一筆都沒驗到，
+# 畫面上還顯示「無法驗證」——最該展示防護力的跨公司比較題反而什麼都沒做。
+_UNIT_TOKEN = r"(兆元|十億元|億元|百萬元|千元)"
+_UNIT_IN_PAREN = re.compile(r"[（(][^（()）]{0,10}?" + _UNIT_TOKEN + r"[^（()）]{0,6}?[）)]")
+_UNIT_AFTER_LABEL = re.compile(r"單位\s*[:：]?\s*" + _UNIT_TOKEN)
+_BARE_YUAN = re.compile(r"[（(]\s*元\s*[）)]")
+
+
+def _unit_hint(*texts):
+    """從表頭或表格前的敘述裡找出金額單位；找不到回 None。
+
+    刻意不在整段文字裡裸找「元」——「元大證券」「還原」都會誤中，
+    只有寫成「（元）」這種明確形式才認。
+    """
+    for t in texts:
+        s = str(t or "")
+        for pat in (_UNIT_AFTER_LABEL, _UNIT_IN_PAREN):
+            m = pat.search(s)
+            if m:
+                return m.group(1)
+        if _BARE_YUAN.search(s):
+            return "元"
+    return None
+
+
+def _pins_other_period(name, period):
+    """這個指標的名稱是不是釘死在「別的期間」。
+
+    同一份簡報常附去年同期當對照，解析時連標籤一起被收進當期資料夾：
+    國泰 2026Q1 底下就有「國泰世華銀行 1Q25 稅後淨利 = 12.2 十億元」。
+    拿它當比對基準會出大事——EAP 若把 1Q25 的數字當成 2026Q1 回答（實測就發生了），
+    我們反而會回報「一致」，等於幫錯誤背書。寧可不比。
+    """
+    from graph_rag import pins_own_period
+    from standard_metrics import _expected_tokens, _name_year, _target_year
+
+    if not pins_own_period(name):
+        return False
+    ny, ty = _name_year(name), _target_year(period)
+    if ny is not None and ty is not None and ny != ty:
+        return True
+    return not any(tok in str(name) for tok in _expected_tokens(period))
+
+
 def _pick_local_for_entity(company, period, entity, label, cumulative=None):
     """找「某個子公司」的某個指標。找不到就回 None——**不退回集團層級**。
 
@@ -845,6 +892,8 @@ def _pick_local_for_entity(company, period, entity, label, cumulative=None):
         if entity not in name or label not in name:
             continue
         if re.search(r"成長|年增|季增|佔比|占比", name):
+            continue
+        if _pins_other_period(name, period):
             continue
         val = _to_float_safe(m.get("value"))
         if val is None or not m.get("unit"):
@@ -876,7 +925,7 @@ def _to_float_safe(v):
         return None
 
 
-def cross_check_metrics(answer, company, period):
+def cross_check_metrics(answer, company, period, unmatched=None):
     """比對 EAP 答案中「任何本地也有的指標」數字，不限於七個標準比率。
 
     為什麼要擴大：實測 EAP 回答「中信稅後淨利 166 億、玉山 87.6 億」，
@@ -887,6 +936,14 @@ def cross_check_metrics(answer, company, period):
     只比對「本地明確找得到對應指標」的項目，找不到就跳過——
     沿用專案一貫的高精確度優先：寧可少報，也不要對不相干的數字發假警報。
     回傳 (不一致清單, 實際比對過幾筆)。
+
+    unmatched：傳一個 list 進來，就會把「認得出是哪個指標、但本地沒有對應數字」
+    的項目記進去。這是為了讓畫面分得出「驗過沒問題」和「根本沒驗」——
+    實測 EAP 答台灣人壽前三季 177 億，本地沒收錄這筆，於是安靜跳過，
+    畫面上跟「四筆全部驗過」看起來一模一樣，等於默認了那個沒驗過的數字。
+
+    用選填參數而不是改回傳值的元組長度：這支有多個呼叫端與測試，
+    多回一個元素會把它們全部打掉，而多數呼叫端並不需要這份清單。
     """
     text = str(answer)
     # 候選標籤：本地這一期所有指標的名稱，取「去掉期別標籤」後的形式來比對，
@@ -916,13 +973,27 @@ def cross_check_metrics(answer, company, period):
         else:
             pick = _pick_local_metric(comp, period, label)
             display_comp = comp
-        if not pick or not pick.get("unit"):
+
+        def skip():
+            """記下「認得出是哪個指標，但驗不了」的項目，好讓畫面誠實揭露。"""
+            if unmatched is not None:
+                key = (display_comp, label, str(eap_val))
+                if key not in {(u["company"], u["metric"], u["eap_value_raw"])
+                               for u in unmatched}:
+                    unmatched.append({
+                        "company": display_comp, "metric": label, "period": period,
+                        "eap_value": f"{eap_val:,.2f}".rstrip("0").rstrip(".") + (eap_unit or ""),
+                        "eap_value_raw": str(eap_val),
+                    })
             return False
+
+        if not pick or not pick.get("unit"):
+            return skip()
         # 兩邊都換算成「元」才有可比性——EAP 宣稱的單位常跟本地不同，而且它常換算錯
         eap_base = _to_base_amount(eap_val, eap_unit)
         local_base = _to_base_amount(pick["value"], pick["unit"])
         if eap_base is None or local_base is None:
-            return False
+            return skip()
         checked += 1
         if _significant_gap(eap_base, local_base):
             fmt = lambda v, u: f"{v:,.2f}".rstrip("0").rstrip(".") + (u or "")
@@ -938,13 +1009,16 @@ def cross_check_metrics(answer, company, period):
         # 表格：單位常寫在表頭（「稅後淨利（億元）」），不在數字旁邊；公司則寫在各列
         header, body = rows[0], rows[1:]
         cols = {}
+        # 單位常寫在表格「上方那一行」而不是表頭（「…如下（單位：十億元）：」），
+        # 只看表頭會整張表都判不出單位，於是一筆都比不了。
+        pre_text = text.split("\n|")[0][-120:] if "\n|" in text else ""
+        table_unit = _unit_hint(pre_text)
         for i, h in enumerate(header):
             label = next((l for l in labels if l in h), None)
             if label:
-                um = re.search(r"[（(]\s*(兆元|十億元|億元|百萬元|千元|元)\s*[）)]", h)
                 # 單季／累計寫在欄位標題（「2025Q3單季稅後淨利」「前三季累計稅後淨利」），
                 # 不分開的話兩欄會比到同一筆本地數字，其中一欄必然報錯
-                cols[i] = (label, um.group(1) if um else None, _is_cumulative_text(h))
+                cols[i] = (label, _unit_hint(h) or table_unit, _is_cumulative_text(h))
         for r in body:
             comp = next((rc for rc in (_resolve_company(c) for c in r) if rc), None) or company
             # 列首通常是實體名稱（「中信銀行」「台灣人壽」）。_resolve_company 會把
@@ -971,7 +1045,6 @@ def cross_check_metrics(answer, company, period):
             if idx < 0 or label in seen:
                 continue
             tail = text[idx + len(label): idx + len(label) + 12]
-            um = re.search(r"[（(]\s*(兆元|十億元|億元|百萬元|千元|元)\s*[）)]", tail)
             m = _NUM_WITH_UNIT.search(text, idx + len(label))
             if not m:
                 continue
@@ -982,7 +1055,7 @@ def cross_check_metrics(answer, company, period):
             # 往前看一小段：「**中國信託銀行**：2025年第三季稅後淨利為143億元」——
             # 主詞在指標名之前，只看指標名本身會誤以為講的是集團。
             lead = text[max(0, idx - 40): idx]
-            if compare(company, label, val, m.group(2) or (um.group(1) if um else None),
+            if compare(company, label, val, m.group(2) or _unit_hint(tail),
                        entity=_entity_in(lead),
                        cumulative=_is_cumulative_text(lead + label + tail)):
                 seen.add(label)
@@ -1211,6 +1284,95 @@ def _augment_with_local(question, ctx):
     return None if _eap_found_nothing(aug) else str(aug).strip()
 
 
+# 答案裡提到的期間。各種寫法都要認：2026Q1／2026年第1季／2026年第一季／1Q26／3M26。
+_PERIOD_MENTIONS = (
+    re.compile(r"(20\d{2})\s*年?\s*Q([1-4])"),
+    re.compile(r"(20\d{2})\s*年\s*第\s*([1-4一二三四])\s*季"),
+    re.compile(r"([1-4])Q(\d{2})\b"),
+)
+_ZH_Q = {"一": 1, "二": 2, "三": 3, "四": 4}
+
+# 「相比／減少／下滑／減幅 71%」這類「宣稱了變化」的措辭。
+# 只有真的在做跨期比較才警告——單純把兩期數字列出來並沒有錯。
+_CHANGE_CLAIM = re.compile(
+    r"減少|增加|下滑|下降|衰退|成長|減幅|增幅|降至|升至|相比|較[^。；\n]{0,12}(?:元|%|億|萬)"
+)
+
+
+def _periods_in(text):
+    """答案裡提到了哪些期間，回傳 {(年, 季)}。"""
+    out = set()
+    s = str(text)
+    for i, pat in enumerate(_PERIOD_MENTIONS):
+        for m in pat.finditer(s):
+            a, b = m.group(1), m.group(2)
+            if i == 2:                      # 1Q26 這種是「季在前、年在後」
+                out.add((2000 + int(b), int(a)))
+            else:
+                out.add((int(a), _ZH_Q.get(b, b if not str(b).isdigit() else int(b))))
+    return {(y, q) for y, q in out if isinstance(q, int)}
+
+
+def check_cumulative_comparison(answer, company, period):
+    """第五道防護：數字都對，但「拿來相比」本身無效。
+
+    實測 EAP 回答：「2026Q1 每股盈餘 1.18 元，較 2025Q4 的 4.08 元減少 2.90 元，
+    減幅約 71%」——1.18 和 4.08 各自都正確，本地也驗得過，但 4.08 是 2025 全年累計、
+    1.18 是新年度首季。相減得到的 -71% 沒有意義，那是重新起算不是衰退。
+
+    前四道防護沒有一道攔得住：有回答（不觸發補強）、數字都對（交叉驗證比不出差異）、
+    驗得過（不觸發無法驗證）、有數字（不是敘述型）。而本地其實早就知道——
+    calc_change() 對同一組期間直接回 None，明文拒絕給這個數字。
+
+    只在「累計型指標 ＋ 跨不同季 ＋ 答案宣稱了變化」三者同時成立時才警告：
+    同一季跨年度（2025Q1 vs 2026Q1）本來就可以比，單純並列兩期數字也沒有錯。
+    """
+    from graph_rag import is_cumulative
+
+    text = str(answer)
+    if not _CHANGE_CLAIM.search(text):
+        return []
+
+    quarters = {q for _, q in _periods_in(text)}
+    if len(quarters) < 2:          # 沒有跨到不同季，就沒有這個問題
+        return []
+
+    ms = list_metrics(company, period)
+    periods_txt = sorted(f"{y}Q{q}" for y, q in _periods_in(text))
+    out, seen = [], set()
+
+    def add(label, local_name):
+        if label in seen:
+            return
+        seen.add(label)
+        out.append({"metric": label, "company": company,
+                    "periods": periods_txt, "local_source": local_name})
+
+    # 先用標準比率的同義詞表。EAP 寫「每股盈餘」而本地叫「每股稅後盈餘」，
+    # 純字面比對會整個漏掉——而 EPS 正是最常被拿來錯誤跨季比較的指標。
+    for spec in STANDARD_METRICS:
+        if spec["type"] == "ratio":
+            continue          # 比率本來就該逐季比，不是累計型
+        if not any(re.search(p, text, re.I) for p in spec["include"]):
+            continue
+        pick = _pick(ms, spec, period)
+        if pick and is_cumulative(company, pick["name"]):
+            add(spec["label"], pick["name"])
+
+    # 再掃本地指標名稱本身（涵蓋標準表沒收錄的，例如「合併稅後淨利」）
+    for m in ms:
+        name = m["metric"]
+        label = norm_metric_name(name)
+        # 「中信金控」這種本身就是公司／子公司名的指標名不是指標，拿來當警告標題只會讓人困惑
+        if len(label) < 3 or label not in text:
+            continue
+        if label in list_companies() or _entity_in(label) == label:
+            continue
+        if is_cumulative(company, name):
+            add(label, name)
+    return out
+
+
 def _build_eap_question(req, company, period):
     """把使用者的問題加工成要送給 EAP 的提問，回傳 (提問, 原問題, focus)。
 
@@ -1262,14 +1424,23 @@ def _finalize_eap(answer, original, company, period, last_period):
     # 兩層——標準比率（跨公司對齊過的定義）＋ 任何本地也有的指標（抓單位換算錯誤那類）。
     checked = 0
     try:
+        unmatched = []
         gaps, checked = cross_check_eap(answer, period)
-        more, more_checked = cross_check_metrics(answer, company, period)
+        more, more_checked = cross_check_metrics(answer, company, period, unmatched=unmatched)
         checked += more_checked
         # 同一個指標可能兩層都抓到，用 (公司,指標) 去重，標準比率那層優先
         seen = {(g["company"], g["metric"]) for g in gaps}
         gaps += [g for g in more if (g["company"], g["metric"]) not in seen]
         if gaps:
             resp["cross_check"] = gaps
+        # 部分驗證：有些數字驗過了、有些本地根本沒有對應資料。
+        # 不揭露的話，畫面上「四筆全驗過」和「三筆驗過、一筆沒驗」長得一模一樣，
+        # 等於默認了那個沒驗過的數字（實測：EAP 答台灣人壽前三季 177 億，本地沒收錄）。
+        # 只在「真的驗過幾筆」時才顯示——一筆都沒驗到的情況由 unverified 那段負責。
+        flagged = {(g["company"], g["metric"]) for g in gaps}
+        rest = [u for u in unmatched if (u["company"], u["metric"]) not in flagged]
+        if checked > 0 and rest:
+            resp["partial_check"] = {"verified": checked, "unmatched": rest}
     except Exception:
         pass  # 交叉驗證只是加值提醒，出錯不能影響主回答
     # EAP 撈不到時，改用「本地檢索 ＋ EAP 生成」再試一次（見 _augment_with_local）。
@@ -1292,6 +1463,15 @@ def _finalize_eap(answer, original, company, period, last_period):
                     }
     except Exception:
         pass  # 補強只是加值，出錯不能影響 EAP 的主回答
+
+    # 第五道防護：數字都對，但「拿來相比」本身無效（累計值跨季比較）。
+    # 放在交叉驗證之後、無法驗證之前：它跟數字對不對無關，兩者可能同時成立。
+    try:
+        cum = check_cumulative_comparison(answer, company, period)
+        if cum:
+            resp["cumulative_warning"] = cum
+    except Exception:
+        pass  # 加值提醒，出錯不能影響主回答
 
     # 第四道防護：EAP 講得頭頭是道，但我們一條都驗不了。
     # 實測遇過——問「為什麼基金手續費下滑」，EAP 列出三條理由（市場波動、銷售動能趨緩、

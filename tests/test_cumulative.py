@@ -3,6 +3,9 @@
 這是整個系統最容易出假數字的地方：累計值直接拿去算 QoQ，會得到「業績暴跌 71%」
 這種看起來很像真的、實際上只是累計月數變少的結果。每個測試都對應一段實測過的資料。
 """
+import pytest
+
+from api import check_cumulative_comparison
 from graph_rag import calc_change, is_cumulative, pins_own_period
 from metric_alignment import is_cumulative_name, norm_metric_name
 
@@ -106,3 +109,62 @@ class Test跨期計算:
     def test_非數字不炸(self, temp_metrics):
         c = temp_metrics("＿測試寅＿", "備註", {"2025Q4": "N/A", "2026Q1": "無"})
         assert calc_change(c, "備註", "2026Q1", "2025Q4") is None
+
+
+class Test第五道防護_無效的跨期比較:
+    """數字都對，但「拿來相比」本身無效。
+
+    實測 EAP 回答：「2026Q1 每股盈餘 1.18 元，較 2025Q4 的 4.08 元減少 2.90 元，
+    減幅約 71%」——1.18 和 4.08 各自都正確、交叉驗證也過，但 4.08 是 2025 全年累計、
+    1.18 是新年度首季。那個 -71% 是重新起算，不是衰退。
+
+    前四道防護沒有一道攔得住：有回答（不觸發補強）、數字都對（交叉驗證比不出差異）、
+    驗得過（不觸發無法驗證）、有數字（不是敘述型）。
+    """
+
+    CO = "台北測試金控"
+
+    @pytest.fixture
+    def 累計型指標(self, temp_metrics):
+        # 刻意不在名稱裡寫「累計」——真實資料就是這樣（中信叫「每股稅後盈餘」），
+        # 累計身分只能從 2025 四季逐季遞增的數列認出來。
+        # 而且標準比率字典的 EPS 定義明文 exclude「累計」，名稱帶了反而配不上。
+        temp_metrics(self.CO, "每股稅後盈餘",
+                     {"2025Q1": "0.98", "2025Q2": "2.10", "2025Q3": "3.20",
+                      "2025Q4": "4.08", "2026Q1": "1.18"}, unit="元")
+        temp_metrics(self.CO, "淨利息收益率",
+                     {"2025Q4": "1.64", "2026Q1": "1.68"}, unit="%")
+
+    def test_全年累計比首季要警告(self, 累計型指標):
+        ans = ("台北測試金控 2026Q1 的每股盈餘為 1.18 元，"
+               "較 2025Q4 的 4.08 元減少 2.90 元，減幅約 71%。")
+        out = check_cumulative_comparison(ans, self.CO, "2026Q1")
+        assert len(out) == 1
+        assert "2025Q4" in out[0]["periods"] and "2026Q1" in out[0]["periods"]
+
+    def test_同一季跨年度不警告(self, 累計型指標):
+        """2025Q1 vs 2026Q1 都是前三個月累計，基準一致，這種比較本來就有效。"""
+        ans = "台北測試金控 2026Q1 每股盈餘 1.18 元，較 2025Q1 的 0.98 元成長 20%。"
+        assert check_cumulative_comparison(ans, self.CO, "2026Q1") == []
+
+    def test_只並列數字沒宣稱變化就不警告(self, 累計型指標):
+        """把兩期數字列出來並沒有錯，錯的是宣稱「因此下滑了 71%」。"""
+        ans = "台北測試金控 2026Q1 每股盈餘為 1.18 元；2025Q4 為 4.08 元。"
+        assert check_cumulative_comparison(ans, self.CO, "2026Q1") == []
+
+    def test_比率跨季比較不警告(self, 累計型指標):
+        """逾放比、NIM 這些本來就該逐季比，警告了反而是誤報。"""
+        ans = ("台北測試金控 2026Q1 的淨利息收益率為 1.68%，"
+               "較 2025Q4 的 1.64% 上升 0.04 個百分點。")
+        assert check_cumulative_comparison(ans, self.CO, "2026Q1") == []
+
+    def test_公司名不會被當成指標名(self, 累計型指標):
+        """本地有「中信金控」這種以公司為名的指標，拿它當警告標題只會讓人困惑。"""
+        ans = ("台北測試金控 2026Q1 的每股盈餘為 1.18 元，較 2025Q4 的 4.08 元下滑。")
+        out = check_cumulative_comparison(ans, self.CO, "2026Q1")
+        assert all(w["metric"] != self.CO for w in out)
+
+    def test_期間寫法都認得(self):
+        from api import _periods_in
+        got = _periods_in("2026Q1 vs 2025年第4季 vs 1Q26 vs 2025年第一季")
+        assert (2026, 1) in got and (2025, 4) in got and (2025, 1) in got
