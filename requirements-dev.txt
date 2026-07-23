@@ -1,0 +1,6 @@
+# 開發／測試用，部署時不需要安裝
+-r requirements.txt
+
+pytest>=8.0.0
+# fastapi.testclient 需要（測 /api/upload 的防護用）
+httpx>=0.27.0
