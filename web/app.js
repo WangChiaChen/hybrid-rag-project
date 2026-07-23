@@ -977,6 +977,41 @@ function renderAnswer(d) {
     </div>`;
   }
 
+  // 部分驗證：有些數字驗過了、有些本地根本沒有對應資料。不講清楚的話，
+  // 「四筆全驗過」和「三筆驗過、一筆沒驗」在畫面上長得一模一樣，
+  // 等於默認了那個沒驗過的數字。用中性色調——這是揭露，不是警告。
+  if (d.partial_check && d.partial_check.unmatched.length) {
+    const rows = d.partial_check.unmatched.map((u) =>
+      `<li><strong>${escapeHtml(u.company)}</strong> ${escapeHtml(u.metric)}
+        （${escapeHtml(u.period)}）：EAP 給的是 <b>${escapeHtml(String(u.eap_value))}</b></li>`
+    ).join("");
+    html += `<div class="partial-check">
+      <div class="partial-check-head">ℹ 本次驗證了 ${d.partial_check.verified} 筆，其中這些驗不了</div>
+      <ul>${rows}</ul>
+      <div class="partial-check-foot">上列項目本地知識庫沒有收錄對應的數字，所以系統沒有比對過——
+        這不代表它們有誤，但也<strong>不算通過驗證</strong>。要引用請自行查核原始簡報。</div>
+    </div>`;
+  }
+
+  // 數字都對，但「拿來相比」本身無效。實測 EAP 回「2026Q1 EPS 1.18 元，較 2025Q4 的
+  // 4.08 元減幅約 71%」——兩個數字各自都正確、交叉驗證也過，但 4.08 是 2025 全年累計、
+  // 1.18 是新年度首季，相減沒有意義。本地的 calc_change 對同一組期間直接拒絕給數字。
+  if (d.cumulative_warning && d.cumulative_warning.length) {
+    const rows = d.cumulative_warning.map((c) =>
+      `<li><strong>${escapeHtml(c.metric)}</strong>
+        （本地對應：${escapeHtml(c.local_source)}）
+        ——回答中比較了 ${escapeHtml(c.periods.join(" 與 "))}</li>`
+    ).join("");
+    html += `<div class="cum-warn">
+      <div class="cum-warn-head">⚠ 這是累計值，跨季比較沒有意義</div>
+      <ul>${rows}</ul>
+      <div class="cum-warn-foot">上列指標是「年初至今累計」——新年度第一季必然低於前一年第四季，
+        那是重新起算而不是衰退，算出來的變化率不能當成經營表現。
+        要比較請用<strong>同一季跨年度</strong>（例如去年 Q1 對今年 Q1）。
+        本系統自己的計算對這種組合直接不給數字。</div>
+    </div>`;
+  }
+
   // EAP 給了答案，但我們一條都驗不了。實測遇過 EAP 對「為什麼下滑」列出三條看似
   // 專業的理由，而本地全庫根本沒有提到原因——那是生成的。這裡不斷言它錯，只誠實揭露
   // 「無法驗證」，讓使用者知道這段話不該直接拿去做決策。

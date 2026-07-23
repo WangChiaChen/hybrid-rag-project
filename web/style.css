@@ -617,6 +617,40 @@ footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height
 .cross-warn .xc-eap { color: var(--up); }
 .cross-warn .xc-local { color: #0F4A2B; }
 .cross-warn-foot { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+/* 部分驗證的揭露。用中性藍灰而不是警告色：這不是「有問題」，
+   是「這幾筆我們沒驗過」——讓它跟紅框（數字不符）、琥珀框（比較無效）分得出來。 */
+.partial-check {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-2);
+  background: #F4F6F9;
+  border: 1px solid var(--border);
+  border-left: 3px solid #7C8DA6;
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.partial-check-head { font-weight: 700; margin-bottom: 6px; }
+.partial-check ul { margin: 0; padding-left: 18px; }
+.partial-check li { margin: 3px 0; line-height: 1.6; }
+.partial-check-foot { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+/* 累計值跨季比較的提醒。用琥珀色而不是紅色：這不是「數字錯了」（數字其實都對），
+   是「這個比較無效」，跟交叉驗證的紅框要分得出來。 */
+.cum-warn {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #7A4B00;
+  background: #FDF4E3;
+  border: 1px solid #EBD3A3;
+  border-left: 3px solid #C98A16;
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.cum-warn-head { font-weight: 700; margin-bottom: 6px; }
+.cum-warn ul { margin: 0; padding-left: 18px; }
+.cum-warn li { margin: 3px 0; line-height: 1.6; }
+.cum-warn-foot { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .xc-reask {
   margin-left: 8px; padding: 2px 10px;
   font-family: var(--font); font-size: 12px; color: #fff;
