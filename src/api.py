@@ -886,10 +886,27 @@ def _pick_local_for_entity(company, period, entity, label, cumulative=None):
     """
     ms = [m for m in list_metrics(company, period)
           if classify_metric(m["metric"], m.get("unit")) == "amount"]
+    # 同一家子公司，簡報有時寫全名、有時省略業別：本地是「國泰世華稅後淨利」，
+    # EAP 寫「國泰世華銀行」。只比對全名會整個對不上——實測 EAP 拿 1Q25 的
+    # 國泰世華數字回答 2026Q1，就是因為這個而沒被抓到。
+    # 只有去掉業別後仍夠具體（≥4 字）才採用簡稱：「國泰人壽」去成「國泰」會把
+    # 國泰世華、國泰產險全部誤配成同一家。
+    forms = {entity}
+    for suffix in ("銀行", "人壽", "產險", "證券", "投信", "創投", "投顧"):
+        if entity.endswith(suffix):
+            core = entity[: -len(suffix)]
+            # 兩道門檻缺一不可：
+            #   ≥4 字     ——「國泰人壽」去成「國泰」會把國泰世華、國泰產險全配成同一家
+            #   不在母公司名稱裡 ——「中信銀行」去成「中信」正好是「中信金控」的一部分，
+            #                     會讓子公司的數字配到金控合併數，繞回一開始那個假警報
+            if len(core) >= 4 and core not in company:
+                forms.add(core)
+            break
+
     cands = []
     for m in ms:
         name = str(m["metric"])
-        if entity not in name or label not in name:
+        if label not in name or not any(f in name for f in forms):
             continue
         if re.search(r"成長|年增|季增|佔比|占比", name):
             continue

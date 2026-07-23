@@ -206,3 +206,41 @@ class Test部分驗證的揭露:
         gaps, _ = cross_check_metrics(ans, COMPANY, PERIOD, unmatched=unmatched)
         assert len(gaps) == 1
         assert unmatched == []
+
+
+class Test子公司簡稱與全名:
+    """同一家子公司，簡報有時寫全名、有時省略業別。
+
+    實測：本地是「國泰世華稅後淨利」，EAP 寫「國泰世華銀行」——只比對全名會整個
+    對不上，於是 EAP 拿去年同期的數字回答本季時沒被抓到。
+    """
+
+    @pytest.fixture
+    def 省略業別的本地資料(self, temp_metrics):
+        # 本地用簡稱（沒有「銀行」兩字），EAP 會寫全名
+        temp_metrics(COMPANY, "台北富華稅後淨利", {"2026Q1": "13.2"}, unit="十億元")
+
+    def 表(self, 實體, 值):
+        return (f"各子公司稅後淨利如下（單位：十億元）：\n"
+                f"| 子公司 | 稅後淨利 |\n|---|---|\n| {實體} | {值} |\n")
+
+    def test_EAP寫全名也對得上本地簡稱(self, 省略業別的本地資料):
+        gaps, checked = cross_check_metrics(
+            self.表("台北富華銀行", "12.2"), COMPANY, "2026Q1")
+        assert checked == 1, "「台北富華銀行」應該對得上本地的「台北富華稅後淨利」"
+        assert len(gaps) == 1 and "13.2" in gaps[0]["local_value"]
+
+    def test_數字正確時不誤報(self, 省略業別的本地資料):
+        gaps, checked = cross_check_metrics(
+            self.表("台北富華銀行", "13.2"), COMPANY, "2026Q1")
+        assert checked == 1 and gaps == []
+
+    def test_簡稱太短就不套用(self, temp_metrics):
+        """「國泰人壽」去掉業別剩「國泰」，會把國泰世華、國泰產險全部誤配成同一家。
+        所以只有去掉業別後仍 ≥4 字才採用簡稱。"""
+        temp_metrics(COMPANY, "台北富華稅後淨利", {"2026Q1": "13.2"}, unit="十億元")
+        # 「台北人壽」去掉「人壽」剩「台北」（2 字），不該拿去配「台北富華稅後淨利」
+        gaps, checked = cross_check_metrics(
+            self.表("台北人壽", "99.9"), COMPANY, "2026Q1")
+        assert checked == 0, "簡稱過短就不該套用，否則不同子公司會互相誤配"
+        assert gaps == []
