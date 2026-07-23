@@ -251,6 +251,7 @@ venv/Scripts/python.exe scripts/verify_eap_prompts.py
 | D | 術語對映 | 問「淨手續費收入」也查得到 17,977 |
 | E | 單位規則 | 不自行換算，或換算正確並附算式 |
 | F | 正常題 | 正常答出 1.18 元（別因規則太多而過度拒答） |
+| G | 英文相關性關卡 | 平台回英文拒答，我方偵測仍須為「查無資料＝True」 |
 
 **F 是防過度限制的對照組**——若 F 也開始拒答，代表規則寫得太嚴，要往回調。
 
@@ -267,3 +268,18 @@ venv/Scripts/python.exe scripts/verify_eap_prompts.py
 以及「帶道歉語氣且答案很短」的兜底判斷。
 
 若新增其他說法，請一併更新 `src/api.py` 的 `_EAP_NO_DATA`。
+
+### 這裡設不到的另一道關卡
+
+平台在**檢索之前**還有一道「專案相關性檢查」，被它擋下時回的是英文：
+
+```
+Unable to answer question not relevant to this project and its data
+```
+
+這句**不受 `Setting for when unable to answer` 控制**——那裡設的是中文，改它不會改到這句。
+中文骨架一句都對不上，所以本地一度把它當成「EAP 有回答」，
+補強與退路按鈕都不會觸發。現已另立 `_EAP_NO_DATA_EN` 處理（測試 G）。
+
+被這道關卡擋下時，平台其實**根本沒去檢索**，正是 Vector RAG 最該接手的時機：
+法說會逐字稿只存在本地，平台那邊本來就沒有。

@@ -41,6 +41,12 @@ TESTS = [
     ("F. 正常題（不該被過度限制）",
      "中信金控 2026Q1 的每股盈餘是多少？",
      "資料裡有，應正常答出 1.18 元"),
+
+    ("G. 英文相關性關卡（不受後台措辭設定控制）",
+     "請問今天台北的天氣如何？",
+     "平台會在檢索之前先擋下來，且回的是英文 "
+     "「Unable to answer question not relevant to this project and its data」；"
+     "重點是下方「我方偵測：查無資料」必須為 True，否則 Vector RAG 補強不會觸發"),
 ]
 
 for label, q, expect in TESTS:

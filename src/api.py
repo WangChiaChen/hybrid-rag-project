@@ -15,11 +15,12 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -50,7 +51,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 app = FastAPI(
     title="有你蒸好 · Hybrid RAG API",
-    description="財報分析：Vector RAG（語意檢索）＋ Graph RAG（精準計算）＋ AI Agent 路由",
+    description="財報分析：Vector RAG（語意檢索）＋ 結構化指標庫（公式計算）＋ AI Agent 路由",
     version="1.0.0",
 )
 
@@ -62,6 +63,62 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------- 額度保護：對「會花掉 Gemini／EAP 額度」的端點限流 ----------
+# 為什麼需要：這些端點每呼叫一次就燒一次外部 API 額度，而額度是整個服務共用一份
+# （金鑰在伺服器上，不是每個使用者自帶）。公開網址一旦被連續打，額度會在幾分鐘內見底，
+# 之後所有人——包括示範中的我們——都會拿到 429。
+#
+# 只擋這幾條，不做全站限流：/api/metrics、/api/trend 這種純讀本地 JSON 的端點
+# 不花額度，前端載入儀表板一次就要打好幾條，一起限流反而會誤傷正常操作。
+#
+# 用記憶體的滑動視窗，不引入 redis／slowapi：單一 process 部署（見 render.yaml），
+# 多開一個外部相依只為了限流不划算。代價是重啟後計數歸零、多 worker 各算各的，
+# 對這個規模可以接受。
+_RATE_LIMITS = {
+    # 端點名稱: (視窗內允許次數, 視窗秒數)
+    "chat": (20, 60),        # 問答：正常人不會一分鐘問 20 題，但示範時連問幾題要放得過
+    "upload": (5, 3600),     # 上傳：一份 PDF 要 VLM 逐頁解析，最貴的一條
+    "report": (10, 600),     # Word 報告（本身不呼叫 LLM，但會掃全庫組檔）
+    "summary": (15, 60),     # 儀表板的「生成本期總結」，是 GET 但會呼叫 Gemini
+}
+_RATE_HITS: dict = {}
+_RATE_LOCK = threading.Lock()
+
+
+def _client_key(request) -> str:
+    """限流的識別鍵。部署在 Render 這類反向代理後面時，request.client.host 會是代理的 IP
+    （所有人看起來都同一個），要改看 X-Forwarded-For 的第一段才是真正的來源。
+    """
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit(request, bucket: str):
+    """滑動視窗限流。超過就丟 429，並附上 Retry-After 讓前端知道要等多久。"""
+    limit, window = _RATE_LIMITS[bucket]
+    now = time.time()
+    key = (bucket, _client_key(request))
+    with _RATE_LOCK:
+        hits = [t for t in _RATE_HITS.get(key, []) if now - t < window]
+        if len(hits) >= limit:
+            retry = int(window - (now - hits[0])) + 1
+            _RATE_HITS[key] = hits
+            raise HTTPException(
+                429,
+                f"請求太頻繁，請在 {retry} 秒後再試"
+                f"（{bucket} 每 {window} 秒最多 {limit} 次）",
+                headers={"Retry-After": str(retry)},
+            )
+        hits.append(now)
+        _RATE_HITS[key] = hits
+        # 順手清掉沒人在用的鍵，否則長時間運行下這個 dict 只會單向長大
+        if len(_RATE_HITS) > 1000:
+            for k in [k for k, v in _RATE_HITS.items() if not v or now - v[-1] > 3600]:
+                _RATE_HITS.pop(k, None)
+
 
 TYPE_LABEL = {"ratio": "比率", "per_share": "每股", "amount": "金額"}
 
@@ -330,6 +387,7 @@ def trend(company: str = Query(...), metric: str = Query(...)):
 
 @app.get("/api/summary")
 def summary(
+    request: Request,
     company: str = Query(...),
     period: str = Query(...),
     last_period: Optional[str] = Query(None),
@@ -338,6 +396,9 @@ def summary(
     不是只堆數字，而是讓 AI 讀完數字給結論。
     只根據下方提供的真實數字，累計指標明確標記避免它拿去比錯。
     """
+    # 這條是 GET、看起來像其他讀資料的端點，但它會真的呼叫 Gemini，所以要限流。
+    # 儀表板上就是一顆按鈕，連點就是連續燒額度。
+    _rate_limit(request, "summary")
     from agent_router import get_client, call_with_retry
 
     ms = list_metrics(company, period)
@@ -454,7 +515,7 @@ _PERIOD_CELL = re.compile(r"20\d{2}\s*Q[1-4]|Q[1-4]|FY\d{2}|\d[HQ]\d{2}")
 
 def _parse_series_table(text: str):
     """EAP 的答案通常自己附了一張「期間｜數值」資料表。把它解析出來，
-    圖就能直接用 EAP 自己的數字畫，和答案文字一致（不會又換成我們的 Graph RAG 數字）。
+    圖就能直接用 EAP 自己的數字畫，和答案文字一致（不會又換成我們的指標庫 數字）。
     回傳 {points:[{period,value}], label} 或 None。
     """
     def to_num(s):
@@ -506,7 +567,7 @@ def _parse_series_table(text: str):
 
 def _eap_chart_from_directive(answer: str, company: str, period: str):
     """EAP 只吐「畫圖指令」（```chart / barchart: 標題）而沒有數據。
-    偵測到就用我們自己的 Graph RAG 數據把圖畫出來，並把裸指令從文字裡拿掉。
+    偵測到就用我們自己的 指標庫數據把圖畫出來，並把裸指令從文字裡拿掉。
     回傳（清理過的答案文字, 圖表 payload 或 None）。
     """
     m = _CHART_FENCE.search(answer)
@@ -520,20 +581,20 @@ def _eap_chart_from_directive(answer: str, company: str, period: str):
     metric = _metric_in_directive(directive, c)
 
     # 0) EAP 答案通常自己附了一張「期間｜數值」資料表 → 圖直接用 EAP 的數字畫，
-    #    和上方表格／文字一致（不會又被換成我們 Graph RAG 的數字，導致對不上）
+    #    和上方表格／文字一致（不會又被換成我們指標庫 的數字，導致對不上）
     tbl = _parse_series_table(answer)
     if tbl:
         return cleaned, {"kind": "series", "title": title or f"{c} 各期{metric or tbl['label']}",
                          "metric": metric or tbl["label"] or "數值", "unit": "", "points": tbl["points"]}
 
-    # 1) 沒有資料表，但指令點名了某個具體指標 → 用我們 Graph RAG 的該指標各期。
+    # 1) 沒有資料表，但指令點名了某個具體指標 → 用我們指標庫 的該指標各期。
     #    只對「比率／每股」畫趨勢：絕對金額同名常不同義（年度值 vs 單季值，單位還混用百萬/億/十億），
     #    跨期畫會畫出假的暴跌。金額類就不畫這條線，改走下方的標準關鍵比率圖。
     if metric and is_cross_comparable(metric):
         t = trend(company=c, metric=metric)
         pts = t.get("points", [])
         if pts:
-            cleaned += f"\n\n（下圖為系統依 Graph RAG 數據繪製：{c} 各期{metric}）"
+            cleaned += f"\n\n（下圖為系統依 指標庫數據繪製：{c} 各期{metric}）"
             return cleaned, {"kind": "series", "title": title or f"{c} 各期{metric}",
                              "metric": metric, "unit": _metric_unit(c, metric), "points": pts}
 
@@ -547,7 +608,7 @@ def _eap_chart_from_directive(answer: str, company: str, period: str):
     items = key_ratios(c, p)
     if not items:
         return cleaned, None
-    cleaned += "\n\n（下圖為系統依 Graph RAG 數據繪製的標準關鍵比率，單位皆為 %）"
+    cleaned += "\n\n（下圖為系統依 指標庫數據繪製的標準關鍵比率，單位皆為 %）"
     # 這條路一律畫「標準關鍵比率」，所以標題要照實寫，不要沿用 EAP 指令的標題
     # （EAP 常給「各期手續費淨收益」這種標題，掛在比率圖上會標題文不對圖）
     return cleaned, {"kind": "bars", "title": f"{c} {p} 主要關鍵比率", "items": items}
@@ -555,7 +616,7 @@ def _eap_chart_from_directive(answer: str, company: str, period: str):
 
 # ---------- EAP 答案交叉驗證 ----------
 # EAP 是外部平台，它的數字我們無法保證正確。這裡把 EAP 答案裡的標準指標
-# （EPS／ROE／ROA…）跟我們自己「本地知識庫（Graph RAG）」挑出的乾淨數字比對，
+# （EPS／ROE／ROA…）跟我們自己「本地結構化指標庫」挑出的乾淨數字比對，
 # 差太多就標出來，提醒使用者「這筆對不上，請留意」——做的是交叉驗證，不是斷言誰對。
 
 def _cell_to_float(cell):
@@ -726,6 +787,95 @@ def _pick_local_metric(company, period, label):
     return _pick(ms, spec, period)
 
 
+# 子公司名稱在本地指標裡的寫法不一定跟 EAP 一樣（EAP 寫「中國信託銀行」，
+# 本地是「中信銀行」；「一銀」對「第一銀行」）。收斂到本地用的寫法才對得上。
+_ENTITY_ALIASES = {
+    "中國信託銀行": "中信銀行",
+    "一銀": "第一銀行",
+    "國泰世華": "國泰世華銀行",
+}
+
+
+def _entity_in(text):
+    """這段文字指名了哪個子公司？沒有就回 None（代表講的是集團層級）。
+
+    為什麼要分：EAP 說「中信銀行第三季稅後淨利 143 億」時，那是**子公司**的數字。
+    若照舊拿金控合併的 249 億去比，必然報出不一致——但 EAP 其實完全正確，
+    本地就有「中信銀行第三季稅後淨利 = 143 億元」這筆。實測一則回答就這樣製造 4 則假警報。
+    """
+    from standard_metrics import _SUBSIDIARY
+
+    s = str(text)
+    for alias, canon in _ENTITY_ALIASES.items():
+        if alias in s:
+            return canon
+    # 「中信銀行」「台灣人壽」這種「前綴＋業別」的寫法，抓出完整的實體名
+    m = re.search(r"([一-鿿]{2,6}?(?:" + "|".join(
+        p for p in _SUBSIDIARY if not p.startswith("(")) + r"))", s)
+    return m.group(1) if m else None
+
+
+# 「累計」與「單季」是兩個不同的數字，混比等於製造假警報：中信銀行 2025Q3
+# 單季 143 億、前三季累計 421 億，兩筆都在本地，拿錯一筆就報不一致。
+_CUMULATIVE_HINT = re.compile(r"前[一二三四兩]?季|累計|累積|上半年|年初至今|YTD|\d+M\d{2}|1H\d{2}")
+_SINGLE_HINT = re.compile(r"單季|第[一二三四]季|[1-4]Q\d{2}|當季")
+
+
+def _is_cumulative_text(text):
+    """從欄位標題／上下文判斷這個數字是累計還是單季；判斷不出來回 None。"""
+    s = str(text)
+    if _CUMULATIVE_HINT.search(s):
+        return True
+    if _SINGLE_HINT.search(s):
+        return False
+    return None
+
+
+def _pick_local_for_entity(company, period, entity, label, cumulative=None):
+    """找「某個子公司」的某個指標。找不到就回 None——**不退回集團層級**。
+
+    退回集團層級正是假警報的來源：EAP 明明在講子公司，卻被拿去跟金控合併數比。
+    寧可不比（少報一筆），也不要報一則會讓使用者不信任正確答案的假警報。
+    """
+    ms = [m for m in list_metrics(company, period)
+          if classify_metric(m["metric"], m.get("unit")) == "amount"]
+    cands = []
+    for m in ms:
+        name = str(m["metric"])
+        if entity not in name or label not in name:
+            continue
+        if re.search(r"成長|年增|季增|佔比|占比", name):
+            continue
+        val = _to_float_safe(m.get("value"))
+        if val is None or not m.get("unit"):
+            continue
+        cands.append((_is_cumulative_text(name), len(name),
+                      {"name": name, "value": val, "unit": m["unit"]}))
+    if not cands:
+        return None
+
+    if cumulative is not None:
+        # 名稱明講單季／累計的優先，名稱看不出來的只當備胎。
+        # 中信銀行同時有「第三季稅後淨利 143 億」（單季）、「前三季稅後淨利 421 億」（累計）
+        # 和沒標期別的「稅後淨利 42,057 百萬元」。挑最短名稱會挑到沒標的那筆，
+        # 於是 EAP 把累計值標成單季時，反而因為數字對得上而放行——防護等於失效。
+        explicit = [c for c in cands if c[0] is cumulative]
+        ambiguous = [c for c in cands if c[0] is None]
+        cands = explicit or ambiguous or []
+        if not cands:
+            return None
+
+    cands.sort(key=lambda t: t[1])      # 同一類裡取名稱最短＝最乾淨的那筆
+    return cands[0][2]
+
+
+def _to_float_safe(v):
+    try:
+        return float(str(v).replace(",", "").replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+
+
 def cross_check_metrics(answer, company, period):
     """比對 EAP 答案中「任何本地也有的指標」數字，不限於七個標準比率。
 
@@ -752,10 +902,20 @@ def cross_check_metrics(answer, company, period):
     rows = _markdown_rows(text)
     out, checked = [], 0
 
-    def compare(comp, label, eap_val, eap_unit):
-        """把一組 (公司,指標,數值,單位) 跟本地比。回傳是否真的比到了。"""
+    def compare(comp, label, eap_val, eap_unit, entity=None, cumulative=None):
+        """把一組 (公司,指標,數值,單位) 跟本地比。回傳是否真的比到了。
+
+        entity：EAP 這筆講的是哪個子公司（None = 集團層級）。
+        指名子公司時只跟該子公司的數字比，本地沒有就跳過，絕不退回集團層級——
+        那會把「EAP 講中信銀行 143 億」拿去跟「金控合併 249 億」比，報出假的不一致。
+        """
         nonlocal checked
-        pick = _pick_local_metric(comp, period, label)
+        if entity:
+            pick = _pick_local_for_entity(comp, period, entity, label, cumulative)
+            display_comp = entity
+        else:
+            pick = _pick_local_metric(comp, period, label)
+            display_comp = comp
         if not pick or not pick.get("unit"):
             return False
         # 兩邊都換算成「元」才有可比性——EAP 宣稱的單位常跟本地不同，而且它常換算錯
@@ -767,7 +927,7 @@ def cross_check_metrics(answer, company, period):
         if _significant_gap(eap_base, local_base):
             fmt = lambda v, u: f"{v:,.2f}".rstrip("0").rstrip(".") + (u or "")
             out.append({
-                "company": comp, "metric": label, "period": period,
+                "company": display_comp, "metric": label, "period": period,
                 "eap_value": fmt(eap_val, eap_unit),
                 "local_value": fmt(pick["value"], pick["unit"]),
                 "local_source": pick["name"],
@@ -782,13 +942,19 @@ def cross_check_metrics(answer, company, period):
             label = next((l for l in labels if l in h), None)
             if label:
                 um = re.search(r"[（(]\s*(兆元|十億元|億元|百萬元|千元|元)\s*[）)]", h)
-                cols[i] = (label, um.group(1) if um else None)
+                # 單季／累計寫在欄位標題（「2025Q3單季稅後淨利」「前三季累計稅後淨利」），
+                # 不分開的話兩欄會比到同一筆本地數字，其中一欄必然報錯
+                cols[i] = (label, um.group(1) if um else None, _is_cumulative_text(h))
         for r in body:
             comp = next((rc for rc in (_resolve_company(c) for c in r) if rc), None) or company
+            # 列首通常是實體名稱（「中信銀行」「台灣人壽」）。_resolve_company 會把
+            # 「中信銀行」解析成「中信金控」（簡稱「中信」是它的子字串），
+            # 所以不能只靠它判斷層級，要另外抓子公司名。
+            entity = next((e for e in (_entity_in(c) for c in r) if e), None)
             for i, cell in enumerate(r):
                 if i not in cols:
                     continue
-                label, unit = cols[i]
+                label, unit, cum = cols[i]
                 m = _NUM_WITH_UNIT.search(cell)
                 if not m:
                     continue
@@ -796,7 +962,7 @@ def cross_check_metrics(answer, company, period):
                     val = float(m.group(1).replace(",", ""))
                 except ValueError:
                     continue
-                compare(comp, label, val, m.group(2) or unit)
+                compare(comp, label, val, m.group(2) or unit, entity=entity, cumulative=cum)
     else:
         # 純文字：單位可能緊跟數字，也可能寫在指標名稱後的括號裡
         seen = set()
@@ -813,7 +979,12 @@ def cross_check_metrics(answer, company, period):
                 val = float(m.group(1).replace(",", ""))
             except ValueError:
                 continue
-            if compare(company, label, val, m.group(2) or (um.group(1) if um else None)):
+            # 往前看一小段：「**中國信託銀行**：2025年第三季稅後淨利為143億元」——
+            # 主詞在指標名之前，只看指標名本身會誤以為講的是集團。
+            lead = text[max(0, idx - 40): idx]
+            if compare(company, label, val, m.group(2) or (um.group(1) if um else None),
+                       entity=_entity_in(lead),
+                       cumulative=_is_cumulative_text(lead + label + tail)):
                 seen.add(label)
     return out, checked
 
@@ -920,6 +1091,21 @@ _EAP_NO_DATA = re.compile(
     r"(沒有|並無)[^。；\n]{0,40}(資料|資訊|內容|紀錄|逐字稿)"
 )
 
+# 平台還有一道「專案相關性」關卡，擋在檢索之前、而且回的是英文：
+#     Unable to answer question not relevant to this project and its data
+# 它不受後台「Setting for when unable to answer」控制（那裡設的是中文），所以中文骨架
+# 一句都對不上，補強與退路按鈕都不會觸發。實測問一句與專案無關的問題就會遇到。
+# 這種情況正好是 Vector RAG 最該接手的時機——平台根本沒去檢索，本地卻可能有逐字稿。
+_EAP_NO_DATA_EN = re.compile(
+    r"unable to (answer|find|provide|retrieve|locate)|"
+    r"(cannot|can not|can't|could not|couldn't) (answer|find|provide|locate|retrieve)|"
+    r"not relevant to this project|"
+    r"no (relevant )?(data|information|records?|results?|content)\b[^.\n]{0,40}"
+    r"(found|available|in (the )?(project|knowledge|database))|"
+    r"(is|are) not (available|included|covered) in",
+    re.I,
+)
+
 # 兜底用。上面的骨架仍可能漏掉沒見過的講法，但「查不到」的回覆有兩個穩定特徵：
 # 帶道歉語氣、而且很短（真的查到資料時它會長篇大論還附表格）。
 _EAP_APOLOGY = re.compile(r"抱歉|unfortunately", re.I)
@@ -931,13 +1117,19 @@ def _eap_found_nothing(answer) -> bool:
 
     有 markdown 表格就代表它撈到東西了——那種情況即使句子裡出現「部分查不到」，
     也不算整題落空，不需要跳出退路提示。
+
+    None 要在 str() 之前擋掉：平台回 {"result": null} 時（ask_question 的非串流分支
+    會原樣把 None 傳下來），str(None) 是 "None"——非空字串、又不命中任何說法，
+    於是被當成「有回答」，畫面上就會顯示 None 這四個字當作答案。
     """
+    if answer is None:
+        return True
     text = str(answer).strip()
     if not text:
         return True
     if text.count("|") >= 4:
         return False
-    if _EAP_NO_DATA.search(text):
+    if _EAP_NO_DATA.search(text) or _EAP_NO_DATA_EN.search(text):
         return True
     return bool(_EAP_APOLOGY.search(text)) and len(text) <= _EAP_SHORT_ANSWER
 
@@ -1060,7 +1252,7 @@ def _finalize_eap(answer, original, company, period, last_period):
     """EAP 回答後的共同收尾：畫圖、交叉驗證、查無資料時的本地補強。
     /api/chat 與 /api/chat/stream 共用，避免兩條路徑的加值行為不一致。
     """
-    # 優先用 EAP 答案裡的資料表畫圖；沒有才退回我們的 Graph RAG
+    # 優先用 EAP 答案裡的資料表畫圖；沒有才退回我們的指標庫
     answer, bar = _eap_chart_from_directive(answer, company, period)
     resp = {"answer": answer, "route": "EAP", "calc_result": None, "sources": [],
             "company": company, "period": period, "last_period": last_period}
@@ -1121,7 +1313,8 @@ def _finalize_eap(answer, original, company, period, last_period):
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, request: Request):
+    _rate_limit(request, "chat")
     company = req.company or _infer_company(req.question)
     period = req.period or _infer_period(req.question, company)
 
@@ -1247,7 +1440,7 @@ def _with_live_progress(fn, **kwargs):
 
 
 @app.post("/api/chat/stream")
-def chat_stream(req: ChatRequest):
+def chat_stream(req: ChatRequest, request: Request):
     """逐字串流版的問答。
 
     為什麼要做：EAP 一題要 10~20 秒，本地生成也要好幾秒，原本這段時間畫面只有
@@ -1263,6 +1456,9 @@ def chat_stream(req: ChatRequest):
     刻意不用 EventSource：它只支援 GET，問題會被塞進網址。這裡用 POST ＋
     fetch 的 ReadableStream 讀，前端一樣簡單。
     """
+    # 限流要在建立 StreamingResponse「之前」擋掉：一旦開始串流，HTTP 狀態碼已經送出去
+    # 是 200，這時才在產生器裡丟 HTTPException 只會變成一則 error 事件，拿不到 429。
+    _rate_limit(request, "chat")
     company = req.company or _infer_company(req.question)
     period = req.period or _infer_period(req.question, company)
 
@@ -1379,6 +1575,14 @@ def transcript_content(file: str = Query(...)):
 # VLM 逐頁解析、STT 轉錄都很花時間（分鐘級），同步請求會卡住又沒進度。
 # 改成背景執行緒跑，前端拿 job_id 輪詢進度。
 _UPLOAD_EXTS = {".pdf", ".mp3", ".wav", ".m4a", ".mp4", ".aac", ".ogg"}
+
+# 上傳大小上限。原本是 file.file.read() 一次把整個檔案讀進記憶體、且沒有任何上限——
+# 公開部署時傳一個幾 GB 的檔就能把服務的記憶體吃光（Render 免費方案只有 512MB）。
+# 分段讀＋累計計數，超過就中止並刪掉半個檔，不等整份收完才判斷。
+# 音檔給得比 PDF 寬：一場法說會錄音一小時起跳，PDF 簡報則很少超過 30MB。
+_MAX_UPLOAD_BYTES = {"pdf": 50 * 1024 * 1024, "audio": 200 * 1024 * 1024}
+_UPLOAD_CHUNK = 1024 * 1024
+
 _JOBS: dict = {}
 _JOBS_LOCK = threading.Lock()
 
@@ -1429,12 +1633,14 @@ def _run_upload_job(job_id, kind, saved_path, company, period, max_pages):
 
 @app.post("/api/upload")
 def upload(
+    request: Request,
     company: str = Form(...),
     period: str = Form(...),
     max_pages: int = Form(15),
     file: UploadFile = File(...),
 ):
     """上傳 PDF（走 VLM 解析）或錄音（走 STT 轉錄），存檔後背景解析＋匯入，回傳 job_id。"""
+    _rate_limit(request, "upload")
     if not company.strip() or not period.strip():
         raise HTTPException(400, "請填公司名稱與期間")
     ext = os.path.splitext(file.filename or "")[1].lower()
@@ -1448,8 +1654,24 @@ def upload(
     purge_old(temp_dir)
     purge_old(os.path.join(BASE_DIR, "pages"))
     saved_path = safe_join(temp_dir, f"{company}_{period}{ext}")
-    with open(saved_path, "wb") as out:
-        out.write(file.file.read())
+    limit = _MAX_UPLOAD_BYTES[kind]
+    written = 0
+    try:
+        with open(saved_path, "wb") as out:
+            while chunk := file.file.read(_UPLOAD_CHUNK):
+                written += len(chunk)
+                if written > limit:
+                    raise HTTPException(
+                        413, f"檔案超過上限（{kind} 最大 {limit // (1024 * 1024)}MB）")
+                out.write(chunk)
+    except Exception:
+        # 半個檔留在磁碟上，之後的解析會拿到壞檔；超限或寫入失敗都要清掉
+        if os.path.exists(saved_path):
+            os.unlink(saved_path)
+        raise
+    if written == 0:
+        os.unlink(saved_path)
+        raise HTTPException(400, "檔案是空的")
 
     job_id = uuid.uuid4().hex
     _set_job(job_id, status="queued", progress=0.0, message="已排入處理…", kind=kind)
@@ -1485,8 +1707,9 @@ class ReportRequest(BaseModel):
 
 
 @app.post("/api/report")
-def report(req: ReportRequest):
+def report(req: ReportRequest, request: Request):
     """產生 Word 報告。寫到記憶體不落地——部署後使用者碰不到伺服器磁碟。"""
+    _rate_limit(request, "report")
     ms = list_metrics(req.company, req.period)
     # 單位要走跟 /api/metrics 同一套推定（同公司其他期間 → 同期錨點 → 指標型別），
     # 否則畫面上顯示「-4,313 百萬元＊」的指標，匯出的報告卻是空白單位——
