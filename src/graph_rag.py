@@ -1,6 +1,27 @@
-"""Phase 3：Graph RAG —— 財務指標知識圖譜，確保計算 100% 精準
-正式版可把 networkx 換成 Neo4j，邏輯不變
-資料會存成 JSON 檔，重開程式不會消失
+"""Phase 3：結構化指標庫 —— 財務數字的唯一真實來源，確保計算不經過 LLM。
+
+## 名稱說明：這裡沒有「圖」
+
+檔名叫 graph_rag、底層用 networkx，但**這份資料結構目前沒有任何邊**：
+save_graph() 只序列化 nodes，_load_graph() 也只讀 nodes，全庫搜不到一個 add_edge。
+所有查詢（list_metrics、_sibling_metrics、_compute_cumulative_self）都是對
+G.nodes(data=True) 做線性掃描，沒有多跳走訪、沒有圖演算法。
+換句話說，networkx 在這裡的作用等同一個 dict[str, dict]。
+
+**這是刻意的取捨，不是還沒做。** 早期版本真的建過關係式圖譜——公司／事業體／指標／
+期間各自成節點，數值掛在「申報」關係上（export_graph_csv.py 的 --format flat 保留了
+那版的匯出格式）。實測結果是**跨期間答錯**：同一個指標名稱在不同季共用同一個節點，
+問「2026Q1 的 EPS」會拿到別季的值。改成「公司｜指標｜期間」當唯一鍵之後才正確。
+
+財報數字的存取模式本來就是「精準定位單一格」，不是「探索多跳關係」，
+所以扁平的唯一鍵才是對的資料模型。真正的關聯圖建在 EAP 平台那一側
+（見 export_graph_csv.py，--format precise 匯出給平台的 New Flow 建圖）。
+
+保留 networkx 是為了留一條升級路徑：哪天要加入真正的關係（例如「子公司→母公司」
+的合併關係、或指標之間的計算依賴），資料結構不用整個換掉。在那之前，
+對外描述請用「結構化指標庫」而不是「知識圖譜」——名稱要對得起實作。
+
+資料會存成 JSON 檔（vector_db/graph_data.json），重開程式不會消失。
 """
 import networkx as nx
 import json

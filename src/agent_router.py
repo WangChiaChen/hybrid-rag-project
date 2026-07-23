@@ -1,4 +1,4 @@
-"""Phase 4：AI Agent 路由層 —— 判斷問題走 Vector RAG 還是 Graph RAG
+"""Phase 4：AI Agent 路由層 —— 判斷問題走 Vector RAG 還是結構化指標庫
 用 Gemini 免費版（已優化：合併呼叫次數以節省免費額度，並支援跨公司問題偵測）
 TODO: 拿到 EAP 平台文件後，把這裡換成 EAP 的對話 API
 """

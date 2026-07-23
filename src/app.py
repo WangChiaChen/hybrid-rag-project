@@ -101,7 +101,7 @@ span[class*="material-symbols"], span[class*="material-icons"] {
 """, unsafe_allow_html=True)
 
 st.title("財報分析，有你真好")
-st.caption("Hybrid RAG 架構：Vector RAG（語意檢索）＋ Graph RAG（精準計算）＋ AI Agent 路由")
+st.caption("Hybrid RAG 架構：Vector RAG（語意檢索）＋ 結構化指標庫（公式計算）＋ AI Agent 路由")
 
 # ============ 側邊欄：資料範圍選擇 + 上傳新資料 ============
 with st.sidebar:
@@ -412,7 +412,7 @@ with tab_chat:
                     st.markdown('<span class="badge badge-both">EAP 平台回答</span>', unsafe_allow_html=True)
                 else:
                     badge_class = {"CALC": "badge-calc", "NARRATIVE": "badge-narrative", "BOTH": "badge-both"}.get(route, "badge-narrative")
-                    badge_label = {"CALC": "精準計算 Graph RAG", "NARRATIVE": "語意檢索 Vector RAG", "BOTH": "雙引擎 Hybrid RAG"}.get(route, "")
+                    badge_label = {"CALC": "精準計算 · 指標庫", "NARRATIVE": "語意檢索 · Vector RAG", "BOTH": "雙引擎 Hybrid RAG"}.get(route, "")
                     if badge_label:
                         st.markdown(f'<span class="badge {badge_class}">{badge_label}</span>', unsafe_allow_html=True)
                 st.write(entry["content"])

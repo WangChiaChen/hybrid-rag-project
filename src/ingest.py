@@ -1,4 +1,4 @@
-"""把 vlm_parse.py 解析出來的真實簡報資料，灌進 Vector RAG 和 Graph RAG
+"""把 vlm_parse.py 解析出來的真實簡報資料，灌進 Vector RAG 和結構化指標庫
 執行順序：先跑過 vlm_parse.py（會產生對應的 parsed_*.json），再跑這支
 
 用法：
@@ -91,7 +91,7 @@ def run_ingest(company, period, parsed_json_path=None, pages=None, replace=None)
         valid_metrics = [m for m in key_metrics if m.get("指標名稱") and m.get("數值")]
         if valid_metrics:
             ingest_metrics(company, period, valid_metrics)
-            print(f"第 {i+1} 頁指標已寫入 Graph RAG：{[m.get('指標名稱') for m in valid_metrics]}")
+            print(f"第 {i+1} 頁指標已寫入指標庫：{[m.get('指標名稱') for m in valid_metrics]}")
 
     print(f"\n{company} {period} 的資料已全部匯入完成！")
     return True

@@ -231,7 +231,7 @@ def generate_report(company, period, metrics_summary, narrative_summary, output,
           align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
     _para(doc, "財務分析報告", size=24, bold=True, color=NAVY,
           align=WD_ALIGN_PARAGRAPH.CENTER, space_after=4)
-    _para(doc, "Hybrid RAG · Vector RAG（語意檢索）＋ Graph RAG（精準計算）＋ AI Agent 路由",
+    _para(doc, "Hybrid RAG · Vector RAG（語意檢索）＋ 結構化指標庫（公式計算）＋ AI Agent 路由",
           size=10, color=GREY, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
 
     meta = f"產出日期：{date.today().isoformat()}　｜　分析期間：{period}"
@@ -298,7 +298,7 @@ def generate_report(company, period, metrics_summary, narrative_summary, output,
     # ---------- 頁尾 ----------
     _rule(doc, color="DDDDDD", size="4")
     _para(doc,
-          "資料來源：公開資訊觀測站 · 各公司投資人關係網站。數值由 Graph RAG 以公式計算，"
+          "資料來源：公開資訊觀測站 · 各公司投資人關係網站。數值由指標庫以公式計算，"
           "敘述由 AI Agent 依檢索到的法說會內容生成，僅供分析參考，不構成投資建議。",
           size=8, color=GREY, align=WD_ALIGN_PARAGRAPH.LEFT, space_after=0)
 
