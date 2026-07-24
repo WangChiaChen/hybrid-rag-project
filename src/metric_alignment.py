@@ -121,8 +121,17 @@ def metric_category(name):
 
 
 def is_hero_metric(name):
-    """是不是該放大呈現的門面指標。"""
-    return bool(_HERO.match(str(name)))
+    """是不是該放大呈現的門面指標。
+
+    比對「去掉期別標籤後」的名稱：國泰簡報把當期標成「1Q26稅後淨利」，
+    照原名比對會因為開頭是「1Q26」而落選，反而讓沒標期別的去年同期數字中選——
+    實測國泰 2026Q1 的首頁大字就是去年的 32.2（當期是 31.7）。
+
+    注意這裡只管「這個名字算不算門面」，不管「它是不是本期的」。
+    正規化之後「稅後淨利 (1Q25)」也會通過，所以呼叫端還要再排除釘死別期的
+    （見 api.py 的 hero 判定）。兩件事分開，這支才能維持純粹的名稱判斷。
+    """
+    return bool(_HERO.match(norm_metric_name(name)))
 
 
 def _cosine_sim(a, b):

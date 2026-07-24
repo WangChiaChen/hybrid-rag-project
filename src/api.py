@@ -226,8 +226,12 @@ def _anchor_units(ms: list, umap: dict, umap_norm: Optional[dict] = None) -> dic
 
 def _metric_payload(company: str, m: dict, umap: Optional[dict] = None,
                     anchor_units: Optional[dict] = None,
-                    umap_norm: Optional[dict] = None) -> dict:
-    """統一的指標輸出格式。unit/cumulative 一定要帶——前端要靠它們決定能不能比大小。"""
+                    umap_norm: Optional[dict] = None,
+                    period: Optional[str] = None) -> dict:
+    """統一的指標輸出格式。unit/cumulative 一定要帶——前端要靠它們決定能不能比大小。
+
+    period 用來判斷這筆是不是「別期」的數字（門面判定要用）。沒傳就不做這個排除。
+    """
     unit, inferred = _fill_unit(m["metric"], m.get("unit"), umap or {}, umap_norm)
     if not unit and anchor_units:
         anchored = anchor_units.get(m["metric"])
@@ -247,7 +251,11 @@ def _metric_payload(company: str, m: dict, umap: Optional[dict] = None,
         # 分組與門面判斷也由後端給，前端不必自己用 regex 猜。
         # 這樣改分類規則只要動後端，不用重新部署前端。
         "category": metric_category(m["metric"]),
-        "hero": is_hero_metric(m["metric"]),
+        # 門面數字不能是「別期」的。國泰 2026Q1 底下同時有去年同期的「稅後淨利 (1Q25)」
+        # 和當期的「1Q26稅後淨利」，挑錯的話首頁大字就是去年的數字——不必問任何問題
+        # 就會誤導人，比問答那邊的錯更嚴重。
+        "hero": is_hero_metric(m["metric"]) and not (
+            period and _pins_other_period(m["metric"], period)),
     }
 
 
@@ -282,10 +290,27 @@ def metrics(
     anchors = _anchor_units(ms, umap, umap_norm)     # 同期「同金額不同單位」互相校驗，反推剩下的
     out = []
     for m in ms:
-        item = _metric_payload(company, m, umap, anchors, umap_norm)
+        item = _metric_payload(company, m, umap, anchors, umap_norm, period)
         # calc_change 自己會擋掉累計指標的跨季比較，回 None 而不是假數字
         item["change"] = calc_change(company, m["metric"], period, last_period) if last_period else None
         out.append(item)
+
+    # 同一個指標常有「有標期別」與「沒標期別」兩種寫法——中信的「每股稅後盈餘」和
+    # 「3M26每股稅後盈餘」是同一個 1.18。兩張門面卡放同一個數字，會讓人以為是兩件事。
+    # 同名只留一張，取顯示名稱較短的那個（比較乾淨）。
+    heroes = {}
+    for item in out:
+        if not item["hero"]:
+            continue
+        key = _norm_metric_name(item["metric"])
+        best = heroes.get(key)
+        if best is None or len(item["metric"]) < len(best["metric"]):
+            if best is not None:
+                best["hero"] = False
+            heroes[key] = item
+        else:
+            item["hero"] = False
+
     return {"company": company, "period": period, "last_period": last_period, "metrics": out}
 
 
@@ -1918,7 +1943,7 @@ def report(req: ReportRequest, request: Request):
     summary = []
     for m in ms:
         change = calc_change(req.company, m["metric"], req.period, req.last_period) if req.last_period else None
-        item = _metric_payload(req.company, m, umap, anchors, umap_norm)
+        item = _metric_payload(req.company, m, umap, anchors, umap_norm, req.period)
         unit = item["unit"] or ""
         if unit and item["unit_inferred"]:
             unit += "＊"
