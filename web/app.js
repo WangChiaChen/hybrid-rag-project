@@ -977,6 +977,26 @@ function renderAnswer(d) {
     </div>`;
   }
 
+  // EAP 引用的數字在本地找得到，但屬於「別的期間」。金控簡報常把去年同期放在同一頁
+  // 對照，兩期的數字躺在同一個資料夾裡，平台檢索時抓錯很常見。
+  // 這是這幾道防護裡最有用的一句話——直接告訴使用者正確答案是多少。
+  if (d.prior_period && d.prior_period.length) {
+    const rows = d.prior_period.map((p) =>
+      `<li><strong>${escapeHtml(p.metric)}</strong>：EAP 引用的
+        <b class="xc-eap">${escapeHtml(String(p.quoted_value))}</b>
+        是 <b>${escapeHtml(p.quoted_period)}</b> 的數字；
+        ${escapeHtml(p.current_period)} 應為
+        <b class="xc-local">${escapeHtml(String(p.current_value))}</b>
+        <span class="pp-src">（本地：${escapeHtml(p.current_source)}）</span></li>`
+    ).join("");
+    html += `<div class="prior-period">
+      <div class="prior-period-head">⚠ EAP 引用的是其他期間的數字</div>
+      <ul>${rows}</ul>
+      <div class="prior-period-foot">法說會簡報常把去年同期放在同一頁做對照，平台檢索時容易抓錯期間。
+        本地兩期的數字都有收錄，因此判斷得出來——請以上列的本期數字為準。</div>
+    </div>`;
+  }
+
   // 部分驗證：有些數字驗過了、有些本地根本沒有對應資料。不講清楚的話，
   // 「四筆全驗過」和「三筆驗過、一筆沒驗」在畫面上長得一模一樣，
   // 等於默認了那個沒驗過的數字。用中性色調——這是揭露，不是警告。

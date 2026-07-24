@@ -1415,6 +1415,82 @@ def check_cumulative_comparison(answer, company, period):
     return out
 
 
+# 答案裡出現的數字。前後不能再接數字或小數點，否則 2.18 會在 12.185 裡被誤認。
+_NUM_TOKEN = re.compile(r"(?<![\d.])(\d[\d,]*(?:\.\d+)?)(?![\d.])")
+# 指標名稱裡的期別標籤，用來把「(1Q25)」這種標記顯示給使用者看
+_PERIOD_TAG = re.compile(r"\d[QH]\d{2}|\d+M\d{2}|FY\d{2}|20\d{2}")
+
+
+def _numbers_in(text):
+    out = set()
+    for m in _NUM_TOKEN.finditer(str(text)):
+        try:
+            out.add(float(m.group(1).replace(",", "")))
+        except ValueError:
+            pass
+    return out
+
+
+def check_prior_period_values(answer, company, period):
+    """第六道防護：EAP 引用的是「別期」的數字。
+
+    實測 EAP 被問國泰 2026Q1 的 EPS，開頭就說「為 2.18 元」——那是 1Q25 的，
+    2026Q1 是 2.15。前面每一道都攔不住：本地確實有 2.18 這個數字（只是屬於去年），
+    所以既不算數字不符，也不算查無資料；它有回答、有數字，敘述型與無效比較也不適用。
+
+    金控簡報常把去年同期放在同一頁對照，解析後兩期的數字會躺在同一個資料夾裡，
+    EAP 檢索時抓錯很常見。這道防護能講出最有用的那句話：
+    「這是 1Q25 的數字，2026Q1 是 2.15」。
+
+    三個條件同時成立才報，把誤報壓下來：
+      1. 這筆本地指標的名稱釘死在「別的期間」
+      2. 它的數值確實出現在答案裡，而且答案也在講這個指標（不是碰巧有相同數字）
+      3. 本地有「同一指標的當期版本」，而且值不同
+         ——兩期同值時講哪個都一樣，沒有誤導，不需要吵
+    """
+    text = str(answer)
+    nums = _numbers_in(text)
+    if not nums:
+        return []
+
+    ms = list_metrics(company, period)
+    current = {}
+    for m in ms:
+        if _pins_other_period(m["metric"], period):
+            continue
+        v = _to_float_safe(m["value"])
+        if v is not None:
+            current.setdefault(norm_metric_name(m["metric"]), (m["metric"], v, m.get("unit")))
+
+    out, seen = [], set()
+    for m in ms:
+        name = str(m["metric"])
+        if not _pins_other_period(name, period):
+            continue
+        label = norm_metric_name(name)
+        v = _to_float_safe(m["value"])
+        if v is None or v not in nums or len(label) < 3 or label not in text:
+            continue
+        cur = current.get(label)
+        if not cur or abs(cur[1] - v) < 1e-9:
+            continue
+        key = (label, v)
+        if key in seen:
+            continue
+        seen.add(key)
+        tag = _PERIOD_TAG.search(name)
+        out.append({
+            "company": company,
+            "metric": label,
+            "quoted_value": f"{v:,.2f}".rstrip("0").rstrip(".") + (m.get("unit") or ""),
+            "quoted_period": tag.group(0) if tag else "其他期間",
+            "current_value": f"{cur[1]:,.2f}".rstrip("0").rstrip(".") + (cur[2] or ""),
+            "current_period": period,
+            "current_source": cur[0],
+        })
+    return out
+
+
 def _build_eap_question(req, company, period):
     """把使用者的問題加工成要送給 EAP 的提問，回傳 (提問, 原問題, focus)。
 
@@ -1505,6 +1581,16 @@ def _finalize_eap(answer, original, company, period, last_period):
                     }
     except Exception:
         pass  # 補強只是加值，出錯不能影響 EAP 的主回答
+
+    # 第六道防護：數字本身在本地找得到，但它屬於「別的期間」。
+    # 放在交叉驗證之後：兩者互補——交叉驗證比的是「同一期對不對」，
+    # 這道問的是「你引用的到底是哪一期」。
+    try:
+        stale = check_prior_period_values(answer, company, period)
+        if stale:
+            resp["prior_period"] = stale
+    except Exception:
+        pass  # 加值提醒，出錯不能影響主回答
 
     # 第五道防護：數字都對，但「拿來相比」本身無效（累計值跨季比較）。
     # 放在交叉驗證之後、無法驗證之前：它跟數字對不對無關，兩者可能同時成立。

@@ -618,6 +618,26 @@ footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height
 .cross-warn .xc-local { color: #0F4A2B; }
 .cross-warn-foot { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 
+/* EAP 引用了別期的數字。跟交叉驗證同樣是紅色（都是「數字錯了」等級），
+   但左側加粗邊條區隔——這一則有明確的正解可以講，比「兩邊對不上」更確定。 */
+.prior-period {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #8A2B27;
+  background: #FCECEB;
+  border: 1px solid #F2C4C1;
+  border-left: 5px solid var(--up);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.prior-period-head { font-weight: 700; margin-bottom: 6px; }
+.prior-period ul { margin: 0; padding-left: 18px; }
+.prior-period li { margin: 3px 0; line-height: 1.7; }
+.prior-period .xc-eap { color: var(--up); }
+.prior-period .xc-local { color: #0F4A2B; }
+.prior-period .pp-src { color: var(--muted); font-size: 12px; }
+.prior-period-foot { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
 /* 部分驗證的揭露。用中性藍灰而不是警告色：這不是「有問題」，
    是「這幾筆我們沒驗過」——讓它跟紅框（數字不符）、琥珀框（比較無效）分得出來。 */
 .partial-check {
