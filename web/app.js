@@ -75,6 +75,8 @@ function fillSelect(sel, items, selected) {
   });
 }
 const periodsOf = (name) => (COMPANIES.find((c) => c.name === name) || {}).periods || [];
+// 只有語意段落、沒有指標的期間（年報只索引敘述）。僅問答頁可鎖，儀表板用不到。
+const docPeriodsOf = (name) => (COMPANIES.find((c) => c.name === name) || {}).doc_periods || [];
 
 // 預設要選哪兩期。不能直接拿陣列最後兩個：期間是字串排序，「2026Q1財報」排在
 // 「2026Q1」後面，但財報期只有資產負債表那十幾個科目，法說會的 NIM、手續費都不在裡面。
@@ -753,8 +755,9 @@ function onChatCompanyChange() {
   const name = $("chatCompany").value;
   const per = $("chatPeriod");
   const ps = name ? periodsOf(name) : [];
+  const docPs = name ? docPeriodsOf(name) : [];   // 年報等只有敘述的期間，接在季度後面
   per.innerHTML = "";
-  [SCOPE_NONE, ...ps].forEach((v) => {
+  [SCOPE_NONE, ...ps, ...docPs].forEach((v) => {
     const o = document.createElement("option");
     o.value = v === SCOPE_NONE ? "" : v;
     o.textContent = v;

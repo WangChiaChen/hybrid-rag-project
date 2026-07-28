@@ -271,8 +271,22 @@ def health():
 
 @app.get("/api/companies")
 def companies():
-    """所有公司，各自附上有資料的期間"""
-    return [{"name": c, "periods": list_periods(c)} for c in list_companies()]
+    """所有公司，各自附上有資料的期間。
+
+    periods     ：指標庫裡有數字的期間（儀表板／比較頁用，選了才有指標可顯示）。
+    doc_periods ：只有語意段落、沒有指標的期間（例如年報只索引了敘述、沒抽指標）。
+                  這種期間放進儀表板會 404，所以獨立一欄，只有問答頁的「鎖定期間」吃它。
+    """
+    from vector_rag import list_periods_from_vector
+    out = []
+    for c in list_companies():
+        metric_ps = list_periods(c)
+        # list_periods_from_vector 取 source 去掉公司名後的第一段當期間，
+        # 所以「X 法說會錄音」會被推成「法說會錄音」——那是段落標籤不是期間，排除掉。
+        doc_ps = sorted(p for p in (list_periods_from_vector(c) - set(metric_ps))
+                        if "錄音" not in p)
+        out.append({"name": c, "periods": metric_ps, "doc_periods": doc_ps})
+    return out
 
 
 @app.get("/api/metrics")
