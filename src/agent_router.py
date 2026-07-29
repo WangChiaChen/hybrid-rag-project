@@ -138,11 +138,21 @@ def _fmt_metric(m, company=None):
 
 
 def _pick_period_for_company(c, current_company, current_period):
-    """目前選定的公司用使用者選的期間；其他被提到的公司則用它最新的期間"""
+    """目前選定的公司用使用者選的期間；其他被提到的公司**優先用同一期**。
+
+    比較題幾乎都是「同一期跨公司」（使用者也常在問題裡明寫「玉山2026Q1」）。
+    原本一律用其他公司「最新的期間」，會掉到 2026Q1財報——那期只有資產負債表、
+    沒有 ROE 等比率，於是「中信 vs 玉山 ROE 比較」裡玉山被判成『查無 ROE』，
+    但跨機構比較頁明明查得到 14.43。同名期存在就用它，不存在才退回最新期。
+    """
     if c == current_company:
         return current_period
     periods = list_periods(c)
-    return periods[-1] if periods else None
+    if not periods:
+        return None
+    if current_period and current_period in periods:
+        return current_period
+    return periods[-1]
 
 
 def _value_in_period(company, metric, period):
