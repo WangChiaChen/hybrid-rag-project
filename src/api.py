@@ -1240,6 +1240,18 @@ _EAP_NO_DATA_EN = re.compile(
 _EAP_APOLOGY = re.compile(r"抱歉|unfortunately", re.I)
 _EAP_SHORT_ANSWER = 120
 
+# 平台每則回答開頭都會帶一段自我介紹＋免責聲明（後台 Welcome Address 設的），
+# 例如「您好，我是財報分析助理…查無資料時會明確告知，不會臆測。」。
+# 那句「查無資料時會明確告知」含「查無」二字，會讓下面的 _EAP_NO_DATA 誤判成
+# 「EAP 查無資料」——結果每一則正常回答都跳出「EAP 沒有這筆資料」的退路框，
+# 讓平台看起來一直失敗。偵測前先把這段開場白剝掉。
+_EAP_PREAMBLE = re.compile(r"^\s*您好[，,].*?(?:不會臆測|不臆測|如實告知)[。.]?\s*", re.S)
+
+
+def _strip_eap_preamble(text):
+    """拿掉開頭的自我介紹／免責聲明。剝掉後若剩真正的答案，才拿去判斷查無與否。"""
+    return _EAP_PREAMBLE.sub("", str(text), count=1).strip()
+
 
 def _eap_found_nothing(answer) -> bool:
     """EAP 這次是不是根本沒撈到資料。
@@ -1253,7 +1265,8 @@ def _eap_found_nothing(answer) -> bool:
     """
     if answer is None:
         return True
-    text = str(answer).strip()
+    # 先剝掉固定的開場白，否則它裡面的「查無資料時會明確告知」會讓每則回答都誤判
+    text = _strip_eap_preamble(answer)
     if not text:
         return True
     if text.count("|") >= 4:

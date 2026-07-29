@@ -85,3 +85,27 @@ def test_長篇道歉不算查無():
     long_answer = "很抱歉造成困擾，以下說明中信金控的獲利結構。" + "細節如下。" * 40
     assert len(long_answer) > 120
     assert not _eap_found_nothing(long_answer)
+
+
+class Test開場白不可誤判:
+    """平台每則回答開頭都有自我介紹＋免責聲明（Welcome Address 設的），
+    其中「查無資料時會明確告知」含「查無」二字。實測這讓每一則正常回答
+    都被判成「EAP 查無資料」，畫面上狂跳「EAP 沒有這筆資料」的退路框，
+    讓平台看起來一直失敗——對「以 EAP 為主」的定位很傷。
+    """
+
+    PREAMBLE = ("您好，我是財報分析助理，可查詢中信金控、國泰金控、玉山金控、"
+                "第一金控的財報與法說會內容。所有數字均附出處；"
+                "查無資料時會明確告知，不會臆測。")
+
+    def test_開場白加正常答案不算查無(self):
+        ans = self.PREAMBLE + "\n\n國泰世華銀行2026Q1稅後淨利為132億元。"
+        assert not _eap_found_nothing(ans)
+
+    def test_開場白加真的查無仍算查無(self):
+        """剝掉開場白後，真正的查無回覆還是要認得出來。"""
+        ans = self.PREAMBLE + "\n\n很抱歉，查無此項員工人數資料。"
+        assert _eap_found_nothing(ans)
+
+    def test_只有開場白等於沒答(self):
+        assert _eap_found_nothing(self.PREAMBLE)
