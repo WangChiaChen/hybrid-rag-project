@@ -701,6 +701,8 @@ const ROUTE_BADGE = {
   // EAP 自己查不到，改由本地 Vector RAG 檢索、再交給 EAP 生成的答案。
   // 標成不同顏色，讓人一眼看出這題的資料是我們補的，不是平台原本就有的。
   EAP_RAG: ["EAP 平台回答 · 資料由 Vector RAG 提供", "b-narr"],
+  // EAP 查無、但本地指標庫有確切數字，直接用本地結構化數字回答（不經 EAP 生成）。
+  LOCAL_METRIC: ["本地指標庫回答 · EAP 本次查無", "b-narr"],
 };
 
 const SCOPE_NONE = "（不指定）";   // 「不選」選項：值為空字串，代表交給後端自動辨識

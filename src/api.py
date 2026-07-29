@@ -870,6 +870,81 @@ def _cross_check_prose_entity(answer, company, fallback_period):
     return out, checked
 
 
+def _pick_standard_local(company, period, spec, entity=None):
+    """在一家公司某期，挑出符合這個標準指標定義的本地那筆。
+
+    entity 給了就找「這家子公司」的（名稱含子公司名、且不套用會排除子公司的樣態）；
+    沒給就用一般的集團層級挑法。回傳 {name, value, unit} 或 None。
+    """
+    from standard_metrics import _SUBSIDIARY, _pick
+
+    ms = list_metrics(company, period)
+    if not entity:
+        return _pick(ms, spec, period)
+
+    # 子公司名的比對樣態（沿用 _cross_check_prose_entity 的兩道門檻與別名處理）
+    forms = {entity}
+    for suffix in ("銀行", "人壽", "產險", "證券", "投信", "創投", "投顧"):
+        if entity.endswith(suffix):
+            core = entity[: -len(suffix)]
+            if len(core) >= 4 and core not in company:
+                forms.add(core)
+            break
+    for alias, canon in _ENTITY_ALIASES.items():
+        if canon == entity:
+            forms.add(alias)
+
+    excl = [p for p in spec.get("exclude", []) if p not in _SUBSIDIARY]
+    pick = None
+    for m in ms:
+        name = str(m["metric"])
+        if not any(re.search(p, name) for p in spec["include"]):
+            continue
+        if excl and any(re.search(p, name) for p in excl):
+            continue
+        if not any(f in name for f in forms):
+            continue
+        if _pins_other_period(name, period):
+            continue
+        val = _to_float_safe(m.get("value"))
+        if val is None:
+            continue
+        if pick is None or len(name) < len(pick["name"]):
+            pick = {"name": name, "value": val, "unit": m.get("unit")}
+    return pick
+
+
+def _local_metric_answer(question, company, period):
+    """EAP 查無、但問題正好是本地指標庫收得有的標準指標時，直接用本地結構化數字回一句答案。
+
+    只處理「乾淨的標準指標題」（ROE／EPS／ROA…）：這種問句解析得準、本地也有確切數字，
+    直接回答比丟一顆「改用本地」按鈕好——EAP 是外部 LLM 平台、同一題有時答有時查無，
+    這條路確保只要本地有資料就一定答得出來。敘述型問題仍走既有的補強／退路。
+    回傳答案字串或 None。
+    """
+    if not company:
+        return None
+    spec = _spec_for_text(question)
+    if not spec:
+        return None
+    period = _match_period(company, period)
+    if not period:
+        return None
+
+    entity = _entity_in(question)
+    pick = _pick_standard_local(company, period, spec, entity)
+    if not pick:
+        return None
+
+    subject = entity or company
+    val = pick["value"]
+    val_str = f"{val:g}"
+    unit = spec["unit"]
+    return (f"根據本地知識庫指標庫，{subject}{period}的{spec['label']}為 **{val_str}{unit}**。\n\n"
+            f"（EAP 平台本次查無此資料，此數字由本地指標庫直接讀簡報解析而得，"
+            f"對應欄位：{pick['name']}。）")
+
+
 # 數字後面緊跟的單位。EAP 常自己換算單位而且會算錯，所以比對前一定要看它「宣稱」的單位，
 # 不能假設它跟本地一樣。
 _NUM_WITH_UNIT = re.compile(r"(-?[\d,]+(?:\.\d+)?)\s*(兆元|十億元|億元|百萬元|千元|元)?")
@@ -1688,8 +1763,16 @@ def _finalize_eap(answer, original, company, period, last_period):
     # STT 轉的、只存在本地。所以「EAP 查不到」很常見的原因是資料不在它那邊，不是問題不好。
     try:
         if _eap_found_nothing(answer):
+            # 先試「本地指標庫直接回答」：問題若是乾淨的標準指標題（國泰世華 ROE），
+            # 本地有確切數字就直接答，不必丟按鈕讓使用者再點一次。EAP 是外部 LLM 平台，
+            # 同一題有時答有時查無，這條路保證只要本地有資料就一定答得出來。
+            direct = _local_metric_answer(original, company, period)
             ctx = _local_context(original, company, period)
-            if ctx:
+            if direct:
+                resp["answer"] = direct
+                resp["route"] = "LOCAL_METRIC"
+                resp["sources"] = ctx["sources"] if ctx else []
+            elif ctx:
                 aug = _augment_with_local(original, ctx)
                 if aug:
                     resp["answer"] = aug

@@ -109,3 +109,40 @@ class Test開場白不可誤判:
 
     def test_只有開場白等於沒答(self):
         assert _eap_found_nothing(self.PREAMBLE)
+
+
+class Test查無時本地指標庫直接回答:
+    """EAP 是外部 LLM 平台，同一題有時答有時查無（實測國泰世華 ROE 就這樣）。
+    只要問的是乾淨的標準指標題、而本地指標庫有確切數字，就直接用本地數字回答，
+    不必再丟一顆「改用本地」按鈕讓使用者多點一次——demo 一定答得出來。
+    """
+
+    COMPANY = "台北測試金控"
+
+    def test_指名子公司的比率題直接答(self, temp_metrics):
+        from api import _local_metric_answer
+
+        temp_metrics(self.COMPANY, "台北富華ROE", {"2026Q1": "16.9"}, unit="%")
+        ans = _local_metric_answer("台北富華銀行ROE", self.COMPANY, "2026Q1")
+        assert ans is not None
+        assert "16.9" in ans and "台北富華銀行" in ans
+
+    def test_集團層級比率題直接答(self, temp_metrics):
+        from api import _local_metric_answer
+
+        temp_metrics(self.COMPANY, "ROE", {"2026Q1": "14.43"}, unit="%")
+        ans = _local_metric_answer("台北測試金控ROE", self.COMPANY, "2026Q1")
+        assert ans is not None and "14.43" in ans
+
+    def test_本地沒有這個指標就不硬答(self, temp_metrics):
+        from api import _local_metric_answer
+
+        temp_metrics(self.COMPANY, "稅後淨利", {"2026Q1": "100"}, unit="億元")
+        assert _local_metric_answer("台北測試金控ROE", self.COMPANY, "2026Q1") is None
+
+    def test_敘述型問題不觸發直接答(self, temp_metrics):
+        from api import _local_metric_answer
+
+        temp_metrics(self.COMPANY, "ROE", {"2026Q1": "14.43"}, unit="%")
+        # 沒有標準指標關鍵字 → 交給既有的補強／退路，不由這條路硬湊
+        assert _local_metric_answer("為什麼手續費下滑", self.COMPANY, "2026Q1") is None
