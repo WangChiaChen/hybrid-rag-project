@@ -786,6 +786,90 @@ def _cross_check_prose(answer, fallback_period):
     return out, checked
 
 
+def _cross_check_prose_entity(answer, company, fallback_period):
+    """純文字答案裡「指名子公司」的標準比率（ROE/EPS…），跟本地同名子公司的指標比。
+
+    為什麼要另闢這條路：_cross_check_prose 只認金控層級的公司名，但 EAP 很常寫
+    「國泰世華銀行於 2026 年第一季的 ROE 為 16.9%。資料來源：國泰金控…」——主詞是
+    子公司，金控名只出現在結尾出處行、還落在數字後面，於是金控層級那條路徑整個驗不到。
+
+    而本地正好把子公司比率以「國泰世華ROE = 16.9」這種「子公司名＋指標」的形式收在
+    金控底下。兩邊都指名同一家子公司，比對是安全的——不會重蹈「拿子公司去比集團」的
+    假警報（那正是 STANDARD_METRICS 的 exclude 要擋掉子公司的原因，這裡刻意反過來只留
+    子公司）。回傳 (不一致清單, 實際比對過幾筆)。
+    """
+    if not company:
+        return [], 0
+    from standard_metrics import _SUBSIDIARY
+
+    text = _strip_eap_preamble(answer)
+    entity = _entity_in(text)
+    if not entity:
+        return [], 0
+    pm = re.search(r"20\d{2}\s*Q[1-4]", text)
+    period = pm.group().replace(" ", "") if pm else fallback_period
+    period = _match_period(company, period)
+    if not period:
+        return [], 0
+
+    # 子公司名的比對樣態：全名，加上去掉業別後仍夠具體的核心名（沿用 _pick_local_for_entity
+    # 的兩道門檻：≥4 字、且不在母公司名裡，避免「國泰」把國泰世華／國泰產險全配成一家）。
+    forms = {entity}
+    for suffix in ("銀行", "人壽", "產險", "證券", "投信", "創投", "投顧"):
+        if entity.endswith(suffix):
+            core = entity[: -len(suffix)]
+            if len(core) >= 4 and core not in company:
+                forms.add(core)
+            break
+    # 本地的寫法不一定跟正規名一樣：_entity_in 會把「一銀」正規化成「第一銀行」，
+    # 但本地指標名寫的是「一銀年化股東權益報酬率」。把別名兩個方向都收進來才對得上。
+    for alias, canon in _ENTITY_ALIASES.items():
+        if canon == entity:
+            forms.add(alias)
+
+    ms = list_metrics(company, period)
+    out, checked = [], 0
+    for spec in STANDARD_METRICS:
+        if not any(re.search(p, text, re.I) for p in spec["include"]):
+            continue
+        eap_val = _num_near_metric(text, spec)
+        if eap_val is None:
+            continue
+        # 用標準比率的定義來挑，但**保留子公司**——把 exclude 裡的子公司樣態拿掉，
+        # 其餘（成長／年增／每股淨值那類非本指標的排除）照留。
+        excl = [p for p in spec.get("exclude", []) if p not in _SUBSIDIARY]
+        pick = None
+        for m in ms:
+            name = str(m["metric"])
+            if not any(re.search(p, name) for p in spec["include"]):
+                continue
+            if excl and any(re.search(p, name) for p in excl):
+                continue
+            if not any(f in name for f in forms):
+                continue
+            if _pins_other_period(name, period):
+                continue
+            val = _to_float_safe(m.get("value"))
+            if val is None:
+                continue
+            if pick is None or len(name) < len(pick["name"]):
+                pick = {"name": name, "value": val}
+        if not pick:
+            continue
+        local_val = round(pick["value"], 2)
+        checked += 1
+        if _significant_gap(eap_val, local_val):
+            out.append({
+                "company": entity,
+                "metric": spec["label"],
+                "period": period,
+                "eap_value": eap_val,
+                "local_value": local_val,
+                "local_source": pick["name"],
+            })
+    return out, checked
+
+
 # 數字後面緊跟的單位。EAP 常自己換算單位而且會算錯，所以比對前一定要看它「宣稱」的單位，
 # 不能假設它跟本地一樣。
 _NUM_WITH_UNIT = re.compile(r"(-?[\d,]+(?:\.\d+)?)\s*(兆元|十億元|億元|百萬元|千元|元)?")
@@ -1001,7 +1085,9 @@ def cross_check_metrics(answer, company, period, unmatched=None):
     用選填參數而不是改回傳值的元組長度：這支有多個呼叫端與測試，
     多回一個元素會把它們全部打掉，而多數呼叫端並不需要這份清單。
     """
-    text = str(answer)
+    # 同 cross_check_eap：先剝掉 EAP 的固定開場白，否則它列出的四家公司名會污染
+    # 純文字的公司判斷，把答案裡的數字算到錯的公司頭上。
+    text = _strip_eap_preamble(answer)
     # 候選標籤：本地這一期所有指標的名稱，取「去掉期別標籤」後的形式來比對，
     # 因為 EAP 通常寫「稅後淨利」而本地叫「3M26合併稅後淨利」
     labels = set()
@@ -1135,6 +1221,11 @@ def cross_check_eap(answer, fallback_period):
     """比對 EAP 答案中的標準指標數字與本地知識庫。
     回傳 (不一致清單, 實際比對過幾筆)。
     有表格就比表格（較可靠）；沒表格則退回逐句解析純文字答案。"""
+    # EAP 每則回答都以固定開場白起頭（「…可查詢中信金控、國泰金控、玉山金控、第一金控…」）。
+    # 不剝掉的話，純文字比對會拿開場白裡列的四家公司去切段，最後一家（第一金控）會把
+    # 整段答案本文吞進它的段落，於是不管實際問哪家，指標都被算成第一金控、跟它的本地數字比，
+    # 每則單一指標的純文字答案都跳出假的「數字不一致」紅框。
+    answer = _strip_eap_preamble(answer)
     rows = []
     for ln in str(answer).split("\n"):
         s = ln.strip()
@@ -1572,10 +1663,14 @@ def _finalize_eap(answer, original, company, period, last_period):
         unmatched = []
         gaps, checked = cross_check_eap(answer, period)
         more, more_checked = cross_check_metrics(answer, company, period, unmatched=unmatched)
-        checked += more_checked
-        # 同一個指標可能兩層都抓到，用 (公司,指標) 去重，標準比率那層優先
+        # 指名子公司的純文字標準比率（「國泰世華銀行 ROE 16.9%」），比對本地同名子公司指標。
+        ent, ent_checked = _cross_check_prose_entity(answer, company, period)
+        checked += more_checked + ent_checked
+        # 同一個指標可能多層都抓到，用 (公司,指標) 去重，標準比率那層優先
         seen = {(g["company"], g["metric"]) for g in gaps}
         gaps += [g for g in more if (g["company"], g["metric"]) not in seen]
+        seen = {(g["company"], g["metric"]) for g in gaps}
+        gaps += [g for g in ent if (g["company"], g["metric"]) not in seen]
         if gaps:
             resp["cross_check"] = gaps
         # 部分驗證：有些數字驗過了、有些本地根本沒有對應資料。

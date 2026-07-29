@@ -11,7 +11,11 @@
 """
 import pytest
 
-from api import cross_check_metrics
+from api import (
+    _cross_check_prose_entity,
+    cross_check_eap,
+    cross_check_metrics,
+)
 
 COMPANY = "台北測試金控"
 PERIOD = "2025Q3"
@@ -206,6 +210,78 @@ class Test部分驗證的揭露:
         gaps, _ = cross_check_metrics(ans, COMPANY, PERIOD, unmatched=unmatched)
         assert len(gaps) == 1
         assert unmatched == []
+
+
+class Test開場白不可污染公司判斷:
+    """EAP 每則回答都以固定開場白起頭，裡面列出所有可查詢的公司。
+
+    純文字比對是靠「公司名出現的位置」把答案切段的。開場白把四家公司名塞在最前面，
+    最後一家會把整段答案本文吞進它的段落——於是不管實際問哪家，指標都被算到最後那家
+    頭上、跟它的本地數字比。實測：問國泰世華 ROE 16.9%，卻跳出「第一金控 16.9 vs 11.16」
+    的假紅框。開場白必須在比對前剝掉。
+    """
+
+    開場白 = ("您好，我是財報分析助理，可查詢台北甲金控、台北乙金控、台北丙金控、台北丁金控"
+            "的財報與法說會內容。所有數字均附出處；查無資料時會明確告知，不會臆測。\n\n")
+
+    def test_不把答案算到開場白最後一家頭上(self, temp_metrics):
+        # 開場白最後一家（丁）本地 ROE 11.16；答案其實在講甲、ROE 16.9。
+        temp_metrics("台北丁金控", "台北丁金控股東權益報酬率", {"2026Q1": "11.16"}, unit="%")
+        temp_metrics("台北甲金控", "台北甲金控股東權益報酬率", {"2026Q1": "16.9"}, unit="%")
+        ans = self.開場白 + "台北甲金控2026年第一季的股東權益報酬率（ROE）為16.9%。"
+        gaps, _ = cross_check_eap(ans, "2026Q1")
+        assert all(g["company"] != "台北丁金控" for g in gaps), \
+            f"答案講的是甲，不該報成開場白最後一家的丁：{gaps}"
+        assert gaps == [], f"甲的 16.9 本地就是 16.9，不該有任何不一致：{gaps}"
+
+    def test_開場白不遮蔽真正的不一致(self, temp_metrics):
+        # 甲本地 ROE 12.0，EAP 答 16.9——真的差很多，剝掉開場白後要抓得到。
+        temp_metrics("台北甲金控", "台北甲金控股東權益報酬率", {"2026Q1": "12.0"}, unit="%")
+        ans = self.開場白 + "台北甲金控2026年第一季的股東權益報酬率（ROE）為16.9%。"
+        gaps, checked = cross_check_eap(ans, "2026Q1")
+        assert checked == 1
+        assert len(gaps) == 1 and gaps[0]["company"] == "台北甲金控"
+
+
+class Test指名子公司的純文字比率:
+    """EAP 常寫「國泰世華銀行…ROE 為 16.9%。資料來源：國泰金控…」——主詞是子公司、
+    金控名只在結尾出處行。本地把子公司比率以「國泰世華ROE=16.9」收在金控底下，
+    這條路徑要用子公司名去對，才驗得到（金控層級那條路對不到，會顯示「無法驗證」）。
+
+    安全性關鍵：只拿子公司去比「同一家子公司」的本地數字，絕不退回集團層級。
+    """
+
+    @pytest.fixture
+    def 子公司比率(self, temp_metrics):
+        # 本地以「子公司名＋指標」的形式收在金控底下（真實資料就長這樣）
+        temp_metrics(COMPANY, "台北富華ROE", {"2026Q1": "16.9"}, unit="%")
+        temp_metrics(COMPANY, "台北人壽ROE", {"2026Q1": "12.3"}, unit="%")
+        return COMPANY
+
+    def test_子公司比率正確就驗得到且不誤報(self, 子公司比率):
+        ans = "台北富華銀行於2026年第一季的股東權益報酬率（ROE）為16.9%。資料來源：台北測試金控2026Q1財報。"
+        gaps, checked = _cross_check_prose_entity(ans, COMPANY, "2026Q1")
+        assert checked == 1, "本地有台北富華ROE，應該真的比對到"
+        assert gaps == [], f"16.9 對 16.9，不該報不一致：{gaps}"
+
+    def test_子公司比率錯誤要抓到並標對子公司(self, 子公司比率):
+        ans = "台北富華銀行2026Q1股東權益報酬率（ROE）為20.0%。"
+        gaps, checked = _cross_check_prose_entity(ans, COMPANY, "2026Q1")
+        assert checked == 1
+        assert len(gaps) == 1
+        assert gaps[0]["company"] == "台北富華銀行", "要標成講的那家子公司"
+        assert "16.9" in str(gaps[0]["local_value"])
+
+    def test_不同子公司各比各的不互相誤配(self, 子公司比率):
+        # 講人壽就該比人壽（12.3），不能拿到世華的 16.9
+        ans = "台北人壽2026Q1股東權益報酬率（ROE）為12.3%。"
+        gaps, checked = _cross_check_prose_entity(ans, COMPANY, "2026Q1")
+        assert checked == 1 and gaps == [], f"人壽 12.3 對 12.3 不該報：{gaps}"
+
+    def test_沒指名子公司就不啟動(self, 子公司比率):
+        ans = "台北測試金控2026Q1股東權益報酬率為9.9%。"
+        gaps, checked = _cross_check_prose_entity(ans, COMPANY, "2026Q1")
+        assert checked == 0 and gaps == [], "沒點名子公司，這條路徑不該比"
 
 
 class Test子公司簡稱與全名:
