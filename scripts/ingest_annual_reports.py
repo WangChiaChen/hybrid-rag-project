@@ -46,6 +46,10 @@ DOCS = {
     "國泰金控": {"path": r"C:\Users\jenny wang\Downloads\國泰金2025.pdf", "mode": "vlm",
                  "max_scan": 34},   # 前段致股東報告書＋營運概況，跳過封面
 }
+# 只收前段敘述章節（致股東報告書／營運概況／分部門）。實測過掃全份會把後面兩百頁的
+# 財務報表附註（會計政策 boilerplate）與董事薪酬明細一起收進來——那些是中文散文、
+# 過得了「敘述頁」判準，但對業務問答是雜訊，會把知識庫從 846 撐到 2047 段。
+# 財務數字用季度指標庫；ESG／永續要另立乾淨的來源，不從附註夾帶。
 
 
 def _cjk(t):
@@ -77,8 +81,9 @@ def _index_page(company, page_no, text, dry):
 def ingest_text(company, cfg, dry):
     """文字層乾淨的年報：直接抽字。"""
     d = fitz.open(cfg["path"])
+    scan_to = min(cfg["max_scan"], len(d)) if cfg["max_scan"] else len(d)
     pages, total = [], 0
-    for i in range(min(cfg["max_scan"], len(d))):
+    for i in range(scan_to):
         t = d[i].get_text()
         if _is_narrative(t):
             n = _index_page(company, i + 1, t, dry)

@@ -19,8 +19,13 @@ downloads/
 graph_import.csv
 # export_graph_csv.py（給 EAP 的 New Flow 匯入）
 eap_graph_precise.csv
+# export_hierarchy_edges.py（給 EAP 畫關聯圖：金控→子公司、金控→關鍵指標）
+eap_hierarchy_edges.csv
+eap_metric_edges.csv
 # transcript_to_pdf.py（給 EAP 的 Upload file 用），來源 .txt 有進版控
 outputs/transcript_*.pdf
+# make_eap_upload_pdfs.py（年報上傳版；原始 PDF 通常可直接上傳，這是亂碼時的備援）
+outputs/annual_upload_*.pdf
 
 # Claude Code 本機工具設定（非共用）
 .claude/settings.local.json
