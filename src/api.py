@@ -979,8 +979,11 @@ def _pick_local_metric(company, period, label):
     if not ms:
         return None
     spec = {"include": [re.escape(label)],
-            # 成長／年增這類衍生指標不是金額本身
-            "exclude": _SUBSIDIARY + [r"成長", r"年增", r"季增", r"佔比", r"占比"],
+            # 成長／年增這類衍生指標不是金額本身；「金單一／單體」是母公司單獨，
+            # 集團層級的「稅後淨利」永遠該挑合併數，不能挑到單一（實測母公司單一是虧損，
+            # 拿去當集團數比，正確的單季合併答案反而被報成不一致）。
+            "exclude": _SUBSIDIARY + [r"成長", r"年增", r"季增", r"佔比", r"占比",
+                                      r"金單一", r"單體"],
             "prefer": _GROUP_LEVEL, "unit": ""}
     return _pick(ms, spec, period)
 
@@ -1011,6 +1014,26 @@ def _entity_in(text):
     m = re.search(r"([一-鿿]{2,6}?(?:" + "|".join(
         p for p in _SUBSIDIARY if not p.startswith("(")) + r"))", s)
     return m.group(1) if m else None
+
+
+# 母公司單獨（單一／單體）是第三種實體，跟「集團合併」「子公司」都不同：
+# 中信金控合併 ＝ 各子公司 ＋ 母公司單獨；母公司單獨常是小額或虧損（中信金單一 1Q26 = -43 億）。
+# EAP 實測會把合併數（231 億）貼錯標籤成「中信金單一」，若拿去比集團合併數反而剛好對上、
+# 等於幫錯標籤背書。要能認出「金單一／單體」這種母公司單獨名，才比得到本地正確的那筆。
+# 關鍵陷阱：「單一季」是「單季」的意思，跟「母公司單一」無關，絕不能誤中——所以只認
+# 「金單一」（金字緊接單一）與「單體」，且「單一」後面不接「季」。
+_PARENT_STANDALONE = re.compile(r"[一-鿿]{1,4}金單一(?!季)|單體")
+
+
+def _parent_standalone_in(text):
+    """這段文字有沒有指名「母公司單獨（金單一／單體）」；有就回那個名字，沒有回 None。"""
+    m = _PARENT_STANDALONE.search(str(text))
+    return m.group(0) if m else None
+
+
+def _strip_parent_entity(label):
+    """把標籤裡的母公司單獨前綴去掉，留下純指標名：「中信金單一稅後淨利」→「稅後淨利」。"""
+    return _PARENT_STANDALONE.sub("", str(label)).strip()
 
 
 # 「累計」與「單季」是兩個不同的數字，混比等於製造假警報：中信銀行 2025Q3
@@ -1233,9 +1256,15 @@ def cross_check_metrics(answer, company, period, unmatched=None):
         for i, h in enumerate(header):
             label = next((l for l in labels if l in h), None)
             if label:
+                # 母公司單獨（「中信金單一稅後淨利」）常寫在欄位標題裡。抓出那個實體、
+                # 把標籤縮成純指標名（稅後淨利），才對得上本地的「中信金單一 1Q26 稅後淨利」。
+                col_ent = _parent_standalone_in(h)
+                base = _strip_parent_entity(label) if col_ent else label
+                if not base:            # 標籤整個就是實體名、沒有指標 → 退回原樣、不當實體
+                    base, col_ent = label, None
                 # 單季／累計寫在欄位標題（「2025Q3單季稅後淨利」「前三季累計稅後淨利」），
                 # 不分開的話兩欄會比到同一筆本地數字，其中一欄必然報錯
-                cols[i] = (label, _unit_hint(h) or table_unit, _is_cumulative_text(h))
+                cols[i] = (base, _unit_hint(h) or table_unit, _is_cumulative_text(h), col_ent)
         for r in body:
             comp = next((rc for rc in (_resolve_company(c) for c in r) if rc), None) or company
             # 列首通常是實體名稱（「中信銀行」「台灣人壽」）。_resolve_company 會把
@@ -1245,7 +1274,7 @@ def cross_check_metrics(answer, company, period, unmatched=None):
             for i, cell in enumerate(r):
                 if i not in cols:
                     continue
-                label, unit, cum = cols[i]
+                label, unit, cum, col_ent = cols[i]
                 m = _NUM_WITH_UNIT.search(cell)
                 if not m:
                     continue
@@ -1253,7 +1282,9 @@ def cross_check_metrics(answer, company, period, unmatched=None):
                     val = float(m.group(1).replace(",", ""))
                 except ValueError:
                     continue
-                compare(comp, label, val, m.group(2) or unit, entity=entity, cumulative=cum)
+                # 欄位標題指名的母公司單獨優先於列首抓到的實體
+                compare(comp, label, val, m.group(2) or unit,
+                        entity=col_ent or entity, cumulative=cum)
     else:
         # 純文字：單位可能緊跟數字，也可能寫在指標名稱後的括號裡
         seen = set()
@@ -1272,8 +1303,13 @@ def cross_check_metrics(answer, company, period, unmatched=None):
             # 往前看一小段：「**中國信託銀行**：2025年第三季稅後淨利為143億元」——
             # 主詞在指標名之前，只看指標名本身會誤以為講的是集團。
             lead = text[max(0, idx - 40): idx]
-            if compare(company, label, val, m.group(2) or _unit_hint(tail),
-                       entity=_entity_in(lead),
+            # 母公司單獨可能寫在指標名本身（「中信金單一稅後淨利」），縮成純指標名再比
+            par = _parent_standalone_in(label)
+            cmp_label = _strip_parent_entity(label) if par else label
+            if par and not cmp_label:
+                cmp_label, par = label, None
+            if compare(company, cmp_label, val, m.group(2) or _unit_hint(tail),
+                       entity=par or _entity_in(lead),
                        cumulative=_is_cumulative_text(lead + label + tail)):
                 seen.add(label)
     return out, checked

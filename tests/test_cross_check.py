@@ -13,6 +13,7 @@ import pytest
 
 from api import (
     _cross_check_prose_entity,
+    _pick_local_metric,
     cross_check_eap,
     cross_check_metrics,
 )
@@ -210,6 +211,48 @@ class Test部分驗證的揭露:
         gaps, _ = cross_check_metrics(ans, COMPANY, PERIOD, unmatched=unmatched)
         assert len(gaps) == 1
         assert unmatched == []
+
+
+class Test母公司單獨不可跟集團合併混比:
+    """母公司單獨（金單一／單體）是第三種實體——集團合併 ＝ 各子公司 ＋ 母公司單獨。
+    母公司單獨常是小額或虧損。實測 EAP 把合併數（231 億）貼錯標籤成「中信金單一」，
+    而中信金單一 1Q26 其實是虧損 43 億；拿合併數去比集團合併剛好對上、等於幫錯標籤背書。
+    要認出「金單一」才比得到本地正確的那筆。
+
+    地雷：「單一季」是「單季」的意思，跟母公司單一無關，絕不能誤中。
+    """
+
+    COMPANY = "台北測試金控"
+
+    @pytest.fixture
+    def 母公司單獨與合併(self, temp_metrics):
+        temp_metrics(self.COMPANY, "台北測試金單一 1Q26 稅後淨利", {"2026Q1": "-4,313"}, unit="百萬元")
+        temp_metrics(self.COMPANY, "3M26合併稅後淨利", {"2026Q1": "23,104"}, unit="百萬元")
+        return self.COMPANY
+
+    def test_把合併數冒充母公司單獨要抓到(self, 母公司單獨與合併):
+        # EAP 拿合併的 231.04 億貼上「金單一」標籤；本地金單一是虧損 4,313 百萬
+        ans = "| 期間 | 台北測試金單一稅後淨利（億元） |\n|---|---|\n| 2026Q1 | 231.04 |"
+        gaps, _ = cross_check_metrics(ans, self.COMPANY, "2026Q1")
+        assert len(gaps) == 1
+        assert "金單一" in gaps[0]["company"]
+        assert "4,313" in str(gaps[0]["local_value"])
+
+    def test_母公司單獨數字正確就不誤報(self, 母公司單獨與合併):
+        ans = "| 期間 | 台北測試金單一稅後淨利（億元） |\n|---|---|\n| 2026Q1 | -43.13 |"
+        gaps, checked = cross_check_metrics(ans, self.COMPANY, "2026Q1")
+        assert checked == 1 and gaps == []
+
+    def test_單一季不可被當母公司單獨(self, 母公司單獨與合併):
+        """「單一季稅後淨利 231 億」＝單季合併，正確；不能拿去比母公司單一的 -43 億。"""
+        ans = "台北測試金控2026年第一季單一季稅後淨利為新台幣231億元。"
+        gaps, _ = cross_check_metrics(ans, self.COMPANY, "2026Q1")
+        assert gaps == [], f"單一季是單季合併，不該誤報：{gaps}"
+
+    def test_集團稅後淨利挑合併不挑母公司單獨(self, 母公司單獨與合併):
+        pick = _pick_local_metric(self.COMPANY, "2026Q1", "稅後淨利")
+        assert pick is not None and "合併" in pick["name"], \
+            "集團層級的稅後淨利要挑合併數，不能挑到母公司單一"
 
 
 class Test開場白不可污染公司判斷:
