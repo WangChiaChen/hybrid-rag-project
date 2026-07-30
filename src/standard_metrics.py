@@ -159,8 +159,12 @@ def _to_float(value):
     s = str(value).strip()
     if ";" in s or "(" in s:  # 多期或帶註記的絕對金額——標準比率不該長這樣
         return None
+    # 值裡有時夾著單位符號（實測中信 NIM 存成「1.68%」、玉山 ROA「0.86%」）——
+    # 不剝掉就 float() 失敗、整筆被當成無值丟掉，於是那個比率在比較頁與問答裡憑空消失。
+    # api._to_float_safe 早就這樣處理，這裡對齊。
+    s = s.replace(",", "").replace("%", "").replace("％", "").strip()
     try:
-        return float(s.replace(",", ""))
+        return float(s)
     except ValueError:
         return None
 
