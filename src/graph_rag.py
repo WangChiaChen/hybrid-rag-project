@@ -96,6 +96,10 @@ def save_graph():
 # 只寫幣別、看不出量級的寫法。單獨出現時無從得知是元、千元還是百萬元。
 _NO_MAGNITUDE = ("NT$", "NTD", "TWD", "新台幣", "新臺幣", "台幣", "臺幣")
 
+# 金額量級對「元」的倍率——鍵是 normalize_unit 收斂後的寫法。calc_change 跨期比較時，
+# 同指標若單位漂移（億元↔百萬元↔兆元）要先換算，否則相除差 10~100 倍。
+_UNIT_SCALE = {"千元": 1e3, "百萬元": 1e6, "億元": 1e8, "十億元": 1e9, "兆元": 1e12, "元": 1.0}
+
 
 def normalize_unit(unit, metric=None):
     """統一單位寫法。VLM 是照著各家報表原文抄的，同一個單位實測有 24 種寫法：
@@ -337,6 +341,19 @@ def calc_change(company, metric, this_period, last_period):
     try:
         v1 = _clean_number(G.nodes[n1]["value"])
         v2 = _clean_number(G.nodes[n2]["value"])
+        # 同一個指標跨期，單位可能漂移（實測玉山「淨利息收入」2025 是百萬元、2026Q1 變億元；
+        # 「放款總額」2025Q1 兆元、之後億元）。不換算就直接相除會差 10~100 倍，算出
+        # 「-99.99%」這種假暴跌。兩邊都是已知金額量級就換算成「元」再比；一邊是金額量級、
+        # 另一邊不是（如「家」對「億元」）就不可比、回 None；兩邊都不是金額量級（如「家」對
+        # 「個」、越盾的拼寫差異）視為同單位照算。
+        u1 = normalize_unit(G.nodes[n1].get("unit"), metric)
+        u2 = normalize_unit(G.nodes[n2].get("unit"), metric)
+        if u1 != u2:
+            s1, s2 = _UNIT_SCALE.get(u1), _UNIT_SCALE.get(u2)
+            if s1 and s2:
+                v1, v2 = v1 * s1, v2 * s2
+            elif s1 or s2:
+                return None
         if v2 == 0:
             return None
         return round((v1 - v2) / v2 * 100, 2)
