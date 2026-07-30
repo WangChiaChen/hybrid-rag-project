@@ -34,6 +34,7 @@ from graph_rag import (
     list_companies,
     list_metrics,
     list_periods,
+    normalize_unit,
 )
 from paths import purge_old, safe_join
 from metric_alignment import (
@@ -361,8 +362,9 @@ def compare(
     rows = []
     for name in sorted(set(ma) & set(mb)):
         try:
-            va = float(str(ma[name]["value"]).replace(",", ""))
-            vb = float(str(mb[name]["value"]).replace(",", ""))
+            # 值裡夾的 % 要剝掉，否則像「1.68%」的比率會 float 失敗、整列被丟出對照表
+            va = float(str(ma[name]["value"]).replace(",", "").replace("%", ""))
+            vb = float(str(mb[name]["value"]).replace(",", "").replace("%", ""))
         except ValueError:
             continue
         # 本期沒標單位就用同公司其他期間推定的補上，並標記是推定來的
@@ -402,6 +404,11 @@ def trend(company: str = Query(...), metric: str = Query(...)):
     只回真正的季度（2025Q1…2026Q1），把 "2026Q1財報" 這種非季度標籤排除——
     那是另一個資料來源，混進趨勢線會讓走勢看起來斷掉。
     """
+    # 同一指標跨期單位會漂移（實測玉山「淨利息收入」2025 百萬元、2026Q1 億元；「放款總額」
+    # 2025Q1 兆元、之後億元）。逐點照原始值畫，2026Q1 的 118.58 億會跟前面的 40,935 百萬
+    # 擠在一起、畫出假斷崖。金額類一律換算成「元」再出點，線形才正確；比率／每股沒有量級、
+    # 不換算。缺單位的點用同公司其他期間推定的單位補（跟 /api/compare 一致）。
+    umap = _unit_map(company)
     points = []
     for p in list_periods(company):
         if not _PERIOD_RE.match(p):
@@ -409,10 +416,17 @@ def trend(company: str = Query(...), metric: str = Query(...)):
         hit = next((m for m in list_metrics(company, p) if m["metric"] == metric), None)
         if not hit:
             continue
+        # 值裡夾的 % 要剝掉（實測 NIM 存成「1.68%」，不剝就 float 失敗、整點被丟，
+        # 於是 NIM 趨勢線缺了最新一季）；括號代表負數。
+        raw = (str(hit["value"]).replace(",", "").replace("%", "")
+               .replace("(", "-").replace(")", "").strip())
         try:
-            v = float(str(hit["value"]).replace(",", "").replace("(", "-").replace(")", ""))
+            v = float(raw)
         except ValueError:
             continue
+        scale = _UNIT_SCALE.get(normalize_unit(hit.get("unit") or umap.get(metric), metric))
+        if scale:
+            v *= scale
         points.append({"period": p, "value": v})
 
     return {
