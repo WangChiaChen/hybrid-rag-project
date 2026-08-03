@@ -3,13 +3,22 @@
 TODO: 拿到 EAP 平台文件後，把這裡換成 EAP 的對話 API
 """
 import os
+import re
 import time
 import json
 from google import genai
 from dotenv import load_dotenv
 from vector_rag import query_vector_rag
-from graph_rag import calc_change, list_metrics, list_companies, list_periods, is_cumulative
-from metric_alignment import is_cross_comparable
+from graph_rag import (
+    calc_change,
+    is_cumulative,
+    list_companies,
+    list_metrics,
+    list_periods,
+    pins_own_period,
+)
+from metric_alignment import is_cross_comparable, norm_metric_name
+from standard_metrics import _SUBSIDIARY, _name_year, _target_year
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -155,14 +164,91 @@ def _pick_period_for_company(c, current_company, current_period):
     return periods[-1]
 
 
+def _find_metric(company, metric, period):
+    """在某期間找這個指標的最佳對應。先逐字命中；沒有再用「去掉期別標籤」的正規化名比對。
+
+    跨期命名不一致是常態：國泰當期群組稅後淨利叫「1Q26稅後淨利」、舊期卻叫「稅後淨利」。
+    逐字比對會在當期落空、害系統退到舊期拿舊數字（實測問 2026Q1 卻回 2025Q4 的 107.6）。
+    正規化名補救時要排除「釘死別年度」的對照值（當期資料夾裡常附去年同期，如「稅後淨利 (1Q25)」）。
+    回傳指標 dict（含 value／unit／metric）或 None。
+    """
+    ms = list_metrics(company, period)
+    exact = next((m for m in ms if m["metric"] == metric), None)
+    if exact:
+        return exact
+    target = norm_metric_name(metric)
+    ty = _target_year(period)
+    cands = []
+    for m in ms:
+        name = str(m["metric"])
+        if norm_metric_name(name) != target:
+            continue
+        if pins_own_period(name):                       # 名稱釘死某期別
+            ny = _name_year(name)
+            if ny is not None and ty is not None and ny != ty:
+                continue                                # 釘死的是別的年度（去年同期對照）→ 跳過
+        cands.append(m)
+    cands.sort(key=lambda m: len(str(m["metric"])))     # 同正規化名取最短＝最乾淨的當期那筆
+    return cands[0] if cands else None
+
+
 def _value_in_period(company, metric, period):
-    """某公司某期間裡這個指標的值；沒有回 None"""
-    return next((m["value"] for m in list_metrics(company, period) if m["metric"] == metric), None)
+    """某公司某期間裡這個指標的值；沒有回 None。用 _find_metric 才認得跨期命名變體。"""
+    m = _find_metric(company, metric, period)
+    return m["value"] if m else None
 
 
 def _periods_with_metric(company, metric):
     """這個公司哪些期間有這個指標（照 list_periods 的時間順序）"""
     return [p for p in list_periods(company) if _value_in_period(company, metric, p) is not None]
+
+
+# 問「各子公司／子公司別／分項」是要「分項列出」，不是要一個集團總數。
+_BREAKDOWN_HINT = re.compile(r"各子公司|子公司別|各家子公司|各子公司的|子公司.{0,4}分項|分項|拆解|獲利組成")
+# 從問題抓指標關鍵字（長的先比，避免「淨利」搶走「稅後淨利」）
+_BREAKDOWN_KW = ["稅後淨利", "稅前淨利", "營業收入", "淨手續費收入", "手續費",
+                 "淨利息收入", "淨利", "獲利", "營收", "保費", "放款", "存款", "淨值"]
+
+
+def _subsidiary_breakdown(question, company, period):
+    """「國泰各子公司稅後淨利」這種分項題：列出各子公司的該指標，而不是回一個集團總數。
+
+    原本路由把它當單一指標算，回的是金控整體、還常因命名不一致退到舊期（實測回 2025Q4
+    的 107.6）。這裡直接從指標庫撈「指名子公司且屬當期」的分項，組成確定性答案、不走 LLM。
+    回傳答案字串或 None（不是分項題、或本地沒有分項就回 None，讓它走原本流程）。
+    """
+    if not company or not _BREAKDOWN_HINT.search(question):
+        return None
+    kw = next((k for k in _BREAKDOWN_KW if k in question), None)
+    if not kw:
+        return None
+    ty = _target_year(period)
+    ent_re = re.compile(r"[一-鿿]{2,6}?(?:" + "|".join(
+        s for s in _SUBSIDIARY if not s.startswith("(")) + r")")
+    by_entity = {}
+    for m in list_metrics(company, period):
+        name = str(m["metric"])
+        if kw not in name or not any(s in name for s in _SUBSIDIARY):
+            continue
+        if re.search(r"成長|年增|季增|佔比|占比", name):   # 成長率／佔比不是金額本身
+            continue
+        if pins_own_period(name):
+            ny = _name_year(name)
+            if ny is not None and ty is not None and ny != ty:
+                continue                                  # 去年同期對照，跳過
+        if m.get("value") is None:
+            continue
+        em = ent_re.search(name)
+        entity = em.group(0) if em else name
+        # 同一家子公司可能有多個變體（中信銀行稅後淨利 16,586百萬 vs 第一季稅後淨利 166億，
+        # 其實同一筆）——每家只留名稱最短、最乾淨的那筆。
+        if entity not in by_entity or len(name) < len(by_entity[entity][0]):
+            by_entity[entity] = (name, m["value"], m.get("unit") or "")
+    if not by_entity:
+        return None
+    rows = sorted(by_entity.values(), key=lambda r: len(r[0]))
+    body = "；".join(f"{n} {v}{u}" for n, v, u in rows)
+    return f"{company} {period} 各子公司{kw}：{body}。（數字由本地指標庫直接讀簡報解析而得）"
 
 
 def answer_question(question, company, this_period, last_period=None):
@@ -271,6 +357,13 @@ def prepare_answer(question, company, this_period, last_period=None, progress=No
         route = "BOTH"
 
     else:
+        # 分項題（各子公司…）優先：直接列出各子公司的該指標，別當單一集團數字算
+        breakdown = _subsidiary_breakdown(question, company, this_period)
+        if breakdown:
+            _say("偵測到子公司分項題，彙整各子公司指標中…")
+            return {"answer": breakdown, "prompt": None, "route": "CALC",
+                    "calc_result": None, "sources": []}
+
         _say("AI Agent 判斷該用精準計算還是語意檢索…")
         available = [m["metric"] for m in list_metrics(company, this_period)]
         route, metric_used = route_and_pick_metric(question, available)
@@ -295,15 +388,18 @@ def prepare_answer(question, company, this_period, last_period=None, progress=No
                     prev_period = ps[-2] if len(ps) >= 2 else None
 
         if calc_period:
-            current_value = _value_in_period(company, metric_used, calc_period)
+            hit = _find_metric(company, metric_used, calc_period)
+            current_value = hit["value"] if hit else None
+            unit = (hit.get("unit") or "") if hit else ""
             change = calc_change(company, metric_used, calc_period, prev_period) if prev_period else None
             if current_value is not None:
-                calc_result = {"metric": metric_used, "value": current_value,
+                calc_result = {"metric": metric_used, "value": current_value, "unit": unit,
                                "change": change, "period": calc_period}
 
         if route == "CALC" and calc_result:
             change_text = f"，較 {prev_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
-            answer_text = f"{company} {calc_result['period']} 的{calc_result['metric']}為 {calc_result['value']}{change_text}。"
+            # 帶上單位——漏了單位「107.6」會被讀成 107.6 億還是 107.6 十億分不清
+            answer_text = f"{company} {calc_result['period']} 的{calc_result['metric']}為 {calc_result['value']}{calc_result.get('unit', '')}{change_text}。"
             if calc_result["period"] != this_period:
                 answer_text += f"（你選的 {this_period} 沒有這個指標，改用最近有資料的 {calc_result['period']}）"
             # 純計算題不必走 LLM——答案就是公式結果本身
@@ -313,7 +409,7 @@ def prepare_answer(question, company, this_period, last_period=None, progress=No
         if calc_result:
             change_text = f"，較 {prev_period} 變化 {calc_result['change']}%" if calc_result.get("change") is not None else ""
             period_note = "" if calc_result["period"] == this_period else f"（期間 {calc_result['period']}）"
-            context_parts.append(f"[精確計算結果]{period_note} {calc_result['metric']}：{calc_result['value']}{change_text}")
+            context_parts.append(f"[精確計算結果]{period_note} {calc_result['metric']}：{calc_result['value']}{calc_result.get('unit', '')}{change_text}")
 
         # NARRATIVE/BOTH 要檢索；CALC 但連跨期都找不到指標時，也退回語意檢索，不要直接放棄
         if route in ("NARRATIVE", "BOTH") or (route == "CALC" and not calc_result):
