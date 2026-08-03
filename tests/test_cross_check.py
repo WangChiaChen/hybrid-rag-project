@@ -113,6 +113,16 @@ class Test單位寫法:
         gaps, checked = cross_check_metrics(ans, COMPANY, "2026Q1")
         assert checked == 1 and gaps == []
 
+    def test_紅框兩邊都換算成億元顯示(self, temp_metrics):
+        """EAP 少一個量級時，若各照宣稱單位顯示會變「13.2億 vs 13.2十億」——同一個
+        13.2 卻說不一致，看起來很怪。兩邊統一換算成億元，差距才一眼可見。"""
+        temp_metrics(COMPANY, "台北測試銀行稅後淨利", {"2026Q1": "13.2"}, unit="十億元")
+        ans = ("| 子公司 | 2026Q1稅後淨利（億元） |\n|---|---|\n| 台北測試銀行 | 13.2 |\n")
+        gaps, _ = cross_check_metrics(ans, COMPANY, "2026Q1")
+        assert len(gaps) == 1
+        assert gaps[0]["eap_value"] == "13.2億元"
+        assert gaps[0]["local_value"] == "132億元"
+
     def test_不可裸抓元字(self):
         """在整段文字裡裸找「元」會誤中「元大證券」「還原」這類詞。"""
         from api import _unit_hint
@@ -236,7 +246,8 @@ class Test母公司單獨不可跟集團合併混比:
         gaps, _ = cross_check_metrics(ans, self.COMPANY, "2026Q1")
         assert len(gaps) == 1
         assert "金單一" in gaps[0]["company"]
-        assert "4,313" in str(gaps[0]["local_value"])
+        # 顯示統一換算成億元：-4,313 百萬元 = -43.13 億元
+        assert "43.13" in str(gaps[0]["local_value"]) and "億元" in str(gaps[0]["local_value"])
 
     def test_母公司單獨數字正確就不誤報(self, 母公司單獨與合併):
         ans = "| 期間 | 台北測試金單一稅後淨利（億元） |\n|---|---|\n| 2026Q1 | -43.13 |"
@@ -347,7 +358,8 @@ class Test子公司簡稱與全名:
         gaps, checked = cross_check_metrics(
             self.表("台北富華銀行", "12.2"), COMPANY, "2026Q1")
         assert checked == 1, "「台北富華銀行」應該對得上本地的「台北富華稅後淨利」"
-        assert len(gaps) == 1 and "13.2" in gaps[0]["local_value"]
+        # 顯示統一換算成億元：13.2 十億元 = 132 億元
+        assert len(gaps) == 1 and "132" in gaps[0]["local_value"]
 
     def test_數字正確時不誤報(self, 省略業別的本地資料):
         gaps, checked = cross_check_metrics(

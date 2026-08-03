@@ -1250,11 +1250,14 @@ def cross_check_metrics(answer, company, period, unmatched=None):
             return skip()
         checked += 1
         if _significant_gap(eap_base, local_base):
-            fmt = lambda v, u: f"{v:,.2f}".rstrip("0").rstrip(".") + (u or "")
+            # 兩邊都換算成「億元」再顯示，差距才一眼可見。原本各自照宣稱單位顯示，
+            # 會變成「EAP 13.2億元 vs 本地 13.2十億元」——同一個 13.2 卻說不一致，看起來很怪；
+            # 換算後成「EAP 13.2億元 vs 本地 132億元」，EAP 少一個量級一目了然。
+            yi = lambda base: f"{base / 1e8:,.2f}".rstrip("0").rstrip(".") + "億元"
             out.append({
                 "company": display_comp, "metric": label, "period": period,
-                "eap_value": fmt(eap_val, eap_unit),
-                "local_value": fmt(pick["value"], pick["unit"]),
+                "eap_value": yi(eap_base),
+                "local_value": yi(local_base),
                 "local_source": pick["name"],
             })
         return True
