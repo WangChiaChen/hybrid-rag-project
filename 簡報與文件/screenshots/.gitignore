@@ -1,0 +1,4 @@
+# 截圖放這裡，檔名照 scripts/insert_ppt_screenshots.py 的 SLOTS
+*.png
+*.jpg
+*.jpeg
