@@ -10,6 +10,7 @@ from google import genai
 from dotenv import load_dotenv
 from vector_rag import query_vector_rag
 from graph_rag import (
+    _UNIT_SCALE,
     calc_change,
     is_cumulative,
     list_companies,
@@ -246,9 +247,29 @@ def _subsidiary_breakdown(question, company, period):
             by_entity[entity] = (name, m["value"], m.get("unit") or "")
     if not by_entity:
         return None
-    rows = sorted(by_entity.values(), key=lambda r: len(r[0]))
-    body = "；".join(f"{n} {v}{u}" for n, v, u in rows)
-    return f"{company} {period} 各子公司{kw}：{body}。（數字由本地指標庫直接讀簡報解析而得）"
+    # 各子公司單位常不一（中信銀行百萬、台灣人壽億），並排不好讀——統一換算成億元。
+    rows = sorted(by_entity.items(), key=lambda kv: len(kv[1][0]))
+    parts = []
+    for entity, (name, value, unit) in rows:
+        yi = _to_yi(value, unit)
+        parts.append(f"{entity} {_fmt_yi(yi)}億元" if yi is not None else f"{entity} {value}{unit}")
+    body = "；".join(parts)
+    return f"{company} {period} 各子公司{kw}（單位：億元）：{body}。（源自本地指標庫，已統一換算）"
+
+
+def _to_yi(value, unit):
+    """把金額換算成「億元」；認不出單位或非數字回 None。"""
+    try:
+        v = float(str(value).replace(",", "").replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+    scale = _UNIT_SCALE.get(unit)
+    return v * scale / 1e8 if scale else None
+
+
+def _fmt_yi(v):
+    """億元數字的顯示：取一位小數，整數就不留小數點（132.0→132、165.86→165.9）。"""
+    return f"{v:.1f}".rstrip("0").rstrip(".")
 
 
 def answer_question(question, company, this_period, last_period=None):
