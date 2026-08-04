@@ -9,8 +9,8 @@
      s18_qa.png          問答與報告實機截圖（例：國泰各子公司稅後淨利）
      s07_graph.png       EAP『探索關連』知識圖譜截圖
      s11_settings.png    EAP 後台 Robot Settings／Context 截圖
-     s15a_eap.png        EAP 平台問答截圖（國泰世華 132 億、附出處）
-     s15b_crosscheck.png EAP 答＋本地紅框標出換算差
+     s15a_eap.png        EAP 平台問答截圖（中信金控 ROE 18.32%、附出處）
+     s15b_crosscheck.png 中信 vs 玉山 ROE 比較（18.32% vs 14.43%，與本地一致）
    （有幾張放幾張，沒有的自動跳過，之後補了再跑一次即可。）
 
 2. 執行：
