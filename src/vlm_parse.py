@@ -84,7 +84,10 @@ def parse_slide_image(image_path):
             PROMPT,
         ],
     ))
-    raw = response.text.strip()
+    # 有些頁 Gemini 會回空回應（被安全過濾擋掉、或 CID 字型的圖它讀不出），此時
+    # response.text 是 None，直接 .strip() 會整份 PDF 崩掉（實測國泰財報就中招）。
+    # 當成「這頁沒東西」跳過即可，不要讓一頁拖垮整份。
+    raw = (response.text or "").strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
     try:
         return json.loads(raw)
