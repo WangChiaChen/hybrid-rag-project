@@ -165,6 +165,21 @@ def _pick_period_for_company(c, current_company, current_period):
     return periods[-1]
 
 
+# 年報只有語意段落、被收在獨立的 doc_period（例如「2025年報」），語意檢索照期間過濾時
+# 不會被搜到。問句提到年報／治理／永續這類「只有年報有」的主題時，就自動改搜年報，
+# 使用者不用手動把期間鎖成「2025年報」。
+_ANNUAL_HINT = re.compile(r"年報|致股東|公司治理|董事會|獨立董事|永續發展|永續報告|ESG|年度報告")
+
+
+def _annual_report_period(company, question):
+    """問句像在問年報時，回傳該公司的年報 doc_period；否則（或該公司沒收年報）回 None。"""
+    if not company or not _ANNUAL_HINT.search(str(question)):
+        return None
+    from vector_rag import list_periods_from_vector
+    ars = sorted(p for p in list_periods_from_vector(company) if "年報" in p)
+    return ars[-1] if ars else None
+
+
 def _find_metric(company, metric, period):
     """在某期間找這個指標的最佳對應。先逐字命中；沒有再用「去掉期別標籤」的正規化名比對。
 
@@ -435,7 +450,10 @@ def prepare_answer(question, company, this_period, last_period=None, progress=No
         # NARRATIVE/BOTH 要檢索；CALC 但連跨期都找不到指標時，也退回語意檢索，不要直接放棄
         if route in ("NARRATIVE", "BOTH") or (route == "CALC" and not calc_result):
             _say("檢索法說會內容中…")
-            vec_results = query_vector_rag(question, top_k=8, company=company, period=this_period)
+            # 問句像在問年報時，自動改搜年報那個 doc_period——不然照當季過濾會撈到季報、
+            # 年報整個搜不到（實測問「玉山 2025年報怎麼看台灣經濟」鎖在 2026Q1 就答不出來）。
+            vec_period = _annual_report_period(company, question) or this_period
+            vec_results = query_vector_rag(question, top_k=8, company=company, period=vec_period)
             docs = vec_results.get("documents", [[]])[0]
             metas = vec_results.get("metadatas", [[]])[0]
             if not docs:

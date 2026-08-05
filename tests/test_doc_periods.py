@@ -51,3 +51,27 @@ def test_年報只有語意段落也要出現在資料來源總覽(temp_metrics)
         assert any(r["period"] == "2026Q1" and r["metrics"] >= 1 for r in rows)
     finally:
         delete_by_source(f"{co} 2025年報")
+
+
+def test_問到年報自動搜年報不用手動鎖(temp_metrics):
+    """年報收在獨立 doc_period，照當季過濾就搜不到。問句提到年報／治理／永續時，
+    自動改搜年報，使用者不必手動把期間鎖成「2025年報」。"""
+    from agent_router import _annual_report_period
+    co = "台北語意路由金控"   # 名稱不含「年報」，免得公司名本身觸發偵測
+    temp_metrics(co, "稅後淨利", {"2026Q1": "100"}, unit="百萬元")
+    try:
+        index_narrative(f"{co}_ar_1", "致股東報告書：本年度營運穩健、公司治理健全。",
+                        {"source": f"{co} 2025年報", "page": 1})
+        assert _annual_report_period(co, f"{co} 2025年報重點？") == "2025年報"
+        assert _annual_report_period(co, f"{co}的公司治理如何？") == "2025年報"   # 年報獨有主題也算
+        assert _annual_report_period(co, f"{co} 2026Q1 ROE？") is None          # 季度題不受影響
+    finally:
+        delete_by_source(f"{co} 2025年報")
+
+
+def test_沒收年報的公司問年報不亂鎖(temp_metrics):
+    """該公司根本沒收年報時，就算問到「年報」也回 None，走原本流程、不硬鎖到空的期間。"""
+    from agent_router import _annual_report_period
+    co = "台北未收金控"   # 名稱不含「年報」
+    temp_metrics(co, "稅後淨利", {"2026Q1": "100"}, unit="百萬元")
+    assert _annual_report_period(co, f"{co} 年報重點？") is None
