@@ -90,7 +90,12 @@ function defaultPeriods(ps) {
 }
 
 function onCompanyChange() {
-  const ps = periodsOf($("company").value);
+  const all = periodsOf($("company").value);
+  // 儀表板只留法說會期間——「財報」期只有資產負債表那十幾個科目，沒有 ROE／NIM／手續費，
+  // 選到只剩十幾張卡片、跨期變化率又全空，放在這頁會誤導。財報資料本身沒刪，
+  // 跨機構比較的「資產負債率」與問答頁仍用得到。
+  const filtered = all.filter((p) => !p.includes("財報"));
+  const ps = filtered.length ? filtered : all;
   const [cur, prev] = defaultPeriods(ps);
   fillSelect($("period"), ps, cur);
   fillSelect($("lastPeriod"), ["（不比較）", ...ps], prev);
