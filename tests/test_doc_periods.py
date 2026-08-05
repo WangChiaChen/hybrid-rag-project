@@ -34,3 +34,20 @@ def test_法說會錄音標籤不算期間(temp_metrics):
         assert not any("法說會錄音" in p for p in row["doc_periods"])
     finally:
         delete_by_source(f"{co} 法說會錄音")
+
+
+def test_年報只有語意段落也要出現在資料來源總覽(temp_metrics):
+    """年報沒抽指標、只有語意段落，原本被資料來源總覽整個漏掉——但上方統計卻把它算進去，
+    兩邊對不上。年報這種 doc_period 也要出現在明細（指標 0、語意段落 N）。"""
+    co = "台北來源測試金控"
+    temp_metrics(co, "稅後淨利", {"2026Q1": "100"}, unit="百萬元")
+    try:
+        index_narrative(f"{co}_yr_src_1", "致股東報告書：本年度營運穩健。",
+                        {"source": f"{co} 2025年報", "page": 4})
+        rows = [r for r in api.sources()["rows"] if r["company"] == co]
+        yr = next((r for r in rows if r["period"] == "2025年報"), None)
+        assert yr is not None, "年報（只有語意段落）也該出現在資料來源總覽"
+        assert yr["metrics"] == 0 and yr["narratives"] >= 1
+        assert any(r["period"] == "2026Q1" and r["metrics"] >= 1 for r in rows)
+    finally:
+        delete_by_source(f"{co} 2025年報")

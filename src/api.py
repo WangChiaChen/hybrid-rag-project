@@ -2089,6 +2089,8 @@ def chat_stream(req: ChatRequest, request: Request):
 @app.get("/api/sources")
 def sources():
     """資料來源總覽：各公司各期間收錄了多少指標與語意段落"""
+    from vector_rag import list_periods_from_vector
+
     counts = {}
     for m in get_all_sources():
         src = m.get("source", "未知")
@@ -2096,12 +2098,23 @@ def sources():
 
     rows = []
     for c in list_companies():
-        for p in list_periods(c):
+        metric_ps = list_periods(c)
+        for p in metric_ps:
             rows.append({
                 "company": c,
                 "period": p,
                 "metrics": len(list_metrics(c, p)),
                 "narratives": counts.get(f"{c} {p}", 0) + counts.get(f"{c} {p} 法說會錄音", 0),
+            })
+        # 年報這種「只有語意段落、沒有指標」的期間也要列出來——否則畫面看起來根本沒收年報，
+        # 但上方「語意段落」統計卻把年報段落算進去了（total_narratives 含全部來源），兩邊對不上。
+        for p in sorted(x for x in (list_periods_from_vector(c) - set(metric_ps))
+                        if "錄音" not in x):
+            rows.append({
+                "company": c,
+                "period": p,
+                "metrics": 0,
+                "narratives": counts.get(f"{c} {p}", 0),
             })
     return {"rows": rows, "total_narratives": sum(counts.values())}
 
