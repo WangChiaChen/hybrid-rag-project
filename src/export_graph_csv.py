@@ -27,7 +27,7 @@ import argparse
 
 from graph_rag import G, is_cumulative, _clean_number
 from metric_alignment import classify_metric, is_cross_comparable
-from standard_metrics import STANDARD_METRICS, _pick
+from standard_metrics import DERIVED_METRICS, STANDARD_METRICS, _derive, _pick
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -109,6 +109,46 @@ def _standard_label_map(periods=None):
     return out
 
 
+def _derived_rows(periods=None):
+    """衍生比率（如資產負債率）補成節點列。
+
+    這幾個比率在圖譜裡沒有現成節點——是問答引擎（agent_router.py）跟跨機構比較頁
+    （standard_metrics.py）用「負債總計 ÷ 資產總計」之類的公式即時算出來的。
+    若匯出的 CSV 沒有這幾列，EAP 平台自己的知識圖譜會跟本地系統修 bug 前一樣，
+    使用者問「資產負債率」時查無此節點、答不出來——即使兩個絕對金額都已經匯進去了。
+    這裡用本地同一套 _derive() 算好，當成一般節點一起匯出，兩邊資料才會一致。
+    """
+    from graph_rag import list_companies, list_periods, list_metrics
+
+    rows = []
+    for c in list_companies():
+        for p in list_periods(c):
+            if periods and p not in periods:
+                continue
+            by_name = {m["metric"]: m for m in list_metrics(c, p)}
+            for spec in DERIVED_METRICS:
+                v = _derive(by_name, spec)
+                if v is None:
+                    continue
+                rows.append({
+                    "公司": c,
+                    "期間": p,
+                    "標準指標": spec["label"],
+                    "指標原始名稱": spec["label"],
+                    "類型": "比率",
+                    "層級": "集團",
+                    "事業體": c,
+                    "累計別": "單季/當期",
+                    "可跨公司比較": "是",
+                    "數值": round(v, 2),
+                    "單位": spec["unit"],
+                    "數值原始": f'{spec["numerator"]} ÷ {spec["denominator"]}（衍生計算）',
+                    "年增": "",
+                    "指標節點名稱(唯一)": f"{c}｜{p}｜{spec['label']}",
+                })
+    return rows
+
+
 def build_precise_rows(periods=None):
     """每一筆「公司｜期間｜指標」一個唯一節點，數值掛節點屬性。
 
@@ -145,6 +185,7 @@ def build_precise_rows(periods=None):
             "年增": d.get("yoy") or "",
             "指標節點名稱(唯一)": f"{company}｜{period}｜{metric}",
         })
+    rows.extend(_derived_rows(periods))
     rows.sort(key=lambda r: (r["公司"], r["期間"], r["層級"], r["指標原始名稱"]))
     return rows
 

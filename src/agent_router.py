@@ -19,7 +19,7 @@ from graph_rag import (
     pins_own_period,
 )
 from metric_alignment import is_cross_comparable, norm_metric_name
-from standard_metrics import _SUBSIDIARY, _name_year, _target_year
+from standard_metrics import DERIVED_METRICS, _derive, _SUBSIDIARY, _name_year, _target_year
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -180,6 +180,22 @@ def _annual_report_period(company, question):
     return ars[-1] if ars else None
 
 
+def _derived_metrics_for(company, period):
+    """衍生比率（如資產負債率）在圖譜裡沒有現成節點，跨機構比較頁（standard_metrics.py
+    的 align_standard／key_ratios）是用兩個絕對金額即時相除算出來的。問答這裡原本只查
+    圖譜，沒接上這條算法——使用者問「資產負債率比較」時，圖譜裡確實查無此指標，
+    問答就照實回「未提供資料」，但比較頁明明算得出來（實測 94.11% vs 93.48%），
+    答案互相矛盾。這裡補上同一份算法，讓問答跟比較頁看到一致的資料。
+    """
+    by_name = {m["metric"]: m for m in list_metrics(company, period)}
+    out = []
+    for spec in DERIVED_METRICS:
+        v = _derive(by_name, spec)
+        if v is not None:
+            out.append({"metric": spec["label"], "value": round(v, 2), "unit": spec["unit"]})
+    return out
+
+
 def _find_metric(company, metric, period):
     """在某期間找這個指標的最佳對應。先逐字命中；沒有再用「去掉期別標籤」的正規化名比對。
 
@@ -188,7 +204,7 @@ def _find_metric(company, metric, period):
     正規化名補救時要排除「釘死別年度」的對照值（當期資料夾裡常附去年同期，如「稅後淨利 (1Q25)」）。
     回傳指標 dict（含 value／unit／metric）或 None。
     """
-    ms = list_metrics(company, period)
+    ms = list_metrics(company, period) + _derived_metrics_for(company, period)
     exact = next((m for m in ms if m["metric"] == metric), None)
     if exact:
         return exact
@@ -359,7 +375,7 @@ def prepare_answer(question, company, this_period, last_period=None, progress=No
             p = _pick_period_for_company(c, company, this_period)
             if not p:
                 continue
-            metrics_c = list_metrics(c, p)
+            metrics_c = list_metrics(c, p) + _derived_metrics_for(c, p)
             if not metrics_c:
                 continue
             comparable = [m for m in metrics_c if is_cross_comparable(m["metric"], m.get("unit"))]
@@ -401,14 +417,18 @@ def prepare_answer(question, company, this_period, last_period=None, progress=No
                     "calc_result": None, "sources": []}
 
         _say("AI Agent 判斷該用精準計算還是語意檢索…")
-        available = [m["metric"] for m in list_metrics(company, this_period)]
+        available = [m["metric"] for m in list_metrics(company, this_period)] \
+            + [d["metric"] for d in _derived_metrics_for(company, this_period)]
         route, metric_used = route_and_pick_metric(question, available)
 
         # 這期沒挑到指標時，改用「全公司所有期間」的指標清單再挑一次。
         # 使用者常會選到只有資產負債表的「財報」期，那裡沒有法說會簡報才有的
         # 手續費淨收益、NIM 之類指標——不該因此就答不出來。
         if route in ("CALC", "BOTH") and not metric_used:
-            available_all = sorted({m["metric"] for p in list_periods(company) for m in list_metrics(company, p)})
+            available_all = sorted(
+                {m["metric"] for p in list_periods(company) for m in list_metrics(company, p)}
+                | {d["metric"] for p in list_periods(company) for d in _derived_metrics_for(company, p)}
+            )
             _, metric_used = route_and_pick_metric(question, available_all)
 
         # 決定要用哪一期算：這期有就用這期；沒有就退到「最近有這個指標」的期間，

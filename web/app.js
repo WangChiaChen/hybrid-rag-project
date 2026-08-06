@@ -74,6 +74,27 @@ function fillSelect(sel, items, selected) {
     sel.appendChild(o);
   });
 }
+
+// 期間分群：季報／財報／年報用 <optgroup> 分開顯示，選單長的時候不會混成一團。
+// 刻意保留「財報」字樣，不因為分群就把文字拿掉——2025Q4 跟 2025Q4財報是完全不同的
+// 兩個期間、資料不重疊（法說會簡報 vs 資產負債表），拿掉文字使用者會分不出來選到哪個。
+// clear=false 時不清空既有選項，方便呼叫端先手動塞一個不分群的選項（例如「不指定」）。
+function fillSelectGrouped(sel, groups, selected, clear = true) {
+  if (clear) sel.innerHTML = "";
+  for (const [label, items] of groups) {
+    if (!items.length) continue;
+    const parent = label ? document.createElement("optgroup") : sel;
+    if (label) { parent.label = label; sel.appendChild(parent); }
+    items.forEach((v) => {
+      const o = document.createElement("option");
+      o.value = o.textContent = v;
+      if (v === selected) o.selected = true;
+      parent.appendChild(o);
+    });
+  }
+}
+// 把期間清單拆成「法說會期」（如 2025Q4）跟「財報期」（如 2025Q4財報）兩組。
+const splitPeriods = (ps) => [ps.filter((p) => !p.includes("財報")), ps.filter((p) => p.includes("財報"))];
 const periodsOf = (name) => (COMPANIES.find((c) => c.name === name) || {}).periods || [];
 // 只有語意段落、沒有指標的期間（年報只索引敘述）。僅問答頁可鎖，儀表板用不到。
 const docPeriodsOf = (name) => (COMPANIES.find((c) => c.name === name) || {}).doc_periods || [];
@@ -448,7 +469,8 @@ function syncComparePeriods(side) {
   const ps = periodsOf($("cmp" + side).value);
   // 同樣避開財報期：兩邊都預設財報期的話，能對齊的只剩「資產負債率」一列，
   // ROE／NIM／逾放比這些真正該比的都在法說會簡報那一期。
-  fillSelect($("cmpP" + side), ps, defaultPeriods(ps)[0]);
+  const [quarterly, statement] = splitPeriods(ps);
+  fillSelectGrouped($("cmpP" + side), [["法說會期", quarterly], ["財報期", statement]], defaultPeriods(ps)[0]);
 }
 
 async function loadCompare() {
@@ -661,7 +683,7 @@ function drawCompareChart(rows, a, b) {
 function resetDashboard() {
   $("company").selectedIndex = 0;
   onCompanyChange(); // 會把期間設回「最新一季 vs 前一季」
-  $("summary-text").textContent = "按上方按鈕，讓 AI Agent 讀完本期指標後給出一句話結論。";
+  $("summary-text").textContent = "選好期間後按上方「搜尋」，AI Agent 會讀完本期指標並自動給出一句話結論。";
   $("summary-text").className = "ai-summary-body placeholder";
 }
 
@@ -670,8 +692,10 @@ async function genSummary() {
   const company = $("company").value, period = $("period").value;
   const lastRaw = $("lastPeriod").value;
   const last = lastRaw && lastRaw !== "（不比較）" ? lastRaw : null;
-  const btn = $("gen-summary"), out = $("summary-text");
+  const btn = $("search"), out = $("summary-text");
+  const icon = document.querySelector(".ai-badge-icon");
   btn.disabled = true;
+  icon?.classList.add("is-loading");
   out.className = "ai-summary-body thinking";
   out.textContent = "AI 讀取本期指標中…";
   try {
@@ -685,6 +709,7 @@ async function genSummary() {
     out.textContent = `總結生成失敗：${e.message}`;
   } finally {
     btn.disabled = false;
+    icon?.classList.remove("is-loading");
   }
 }
 
@@ -763,13 +788,13 @@ function onChatCompanyChange() {
   const per = $("chatPeriod");
   const ps = name ? periodsOf(name) : [];
   const docPs = name ? docPeriodsOf(name) : [];   // 年報等只有敘述的期間，接在季度後面
+  const [quarterly, statement] = splitPeriods(ps);
   per.innerHTML = "";
-  [SCOPE_NONE, ...ps, ...docPs].forEach((v) => {
-    const o = document.createElement("option");
-    o.value = v === SCOPE_NONE ? "" : v;
-    o.textContent = v;
-    per.appendChild(o);
-  });
+  const noneOpt = document.createElement("option");
+  noneOpt.value = "";
+  noneOpt.textContent = SCOPE_NONE;
+  per.appendChild(noneOpt);
+  fillSelectGrouped(per, [["法說會期", quarterly], ["財報期", statement], ["年報", docPs]], null, false);
   per.disabled = !name;   // 未選公司時，期間無從選起
 }
 
@@ -873,6 +898,7 @@ async function sendChat() {
   appendMsg("me", scopeTag + escapeHtml(q));
   // 串流訊息泡泡：先放進度，收到第一個字就換成答案本文
   const live = appendMsg("bot", '<div class="stream-status">AI 查詢中…</div><div class="bot-text"></div>');
+  live.classList.add("is-answering");   // 頭像漂浮動畫：答案開始吐字前都在跑
   const statusEl = live.querySelector(".stream-status");
   const textEl = live.querySelector(".bot-text");
   let answer = "";
@@ -895,7 +921,7 @@ async function sendChat() {
     const d = await streamChat(body, {
       onStatus: (t) => { label = t; waited = 0; statusEl.textContent = t; },
       onDelta: (t) => {
-        if (!answer) { clearInterval(tick); statusEl.remove(); }   // 開始吐字就把進度收掉
+        if (!answer) { clearInterval(tick); statusEl.remove(); live.classList.remove("is-answering"); }   // 開始吐字就把進度收掉、頭像停止漂浮
         answer += t;
         // 串流過程用純文字呈現（Markdown 只寫到一半會渲染成亂的），收尾再整段轉 Markdown
         textEl.textContent = answer;
@@ -1473,10 +1499,11 @@ async function waitForBackend() {
     if (!COMPANIES.length) return showError("知識庫是空的");
     fillSelect($("company"), COMPANIES.map((c) => c.name));
     $("company").onchange = onCompanyChange;
-    $("period").onchange = load;
-    $("lastPeriod").onchange = load;
+    // 分析期間／比較期間刻意不接 onchange——選單只改變下拉選單本身的值，
+    // 畫面跟 AI 觀點都要等按下「搜尋」才一起套用，不要選一改就馬上跳。
     $("reset").onclick = resetDashboard;
-    $("gen-summary").onclick = genSummary;
+    // 搜尋＝套用目前選的期間＋自動生成 AI 觀點，一鍵完成，不用選完期間後再另外按一次
+    $("search").onclick = async () => { await load(); await genSummary(); };
     onCompanyChange();
     initCompare();
     initChat();

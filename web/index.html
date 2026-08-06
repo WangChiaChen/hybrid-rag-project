@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>有你蒸好 · 財報分析</title>
+<title>財報分析，有你蒸好</title>
+<link rel="icon" type="image/png" href="/favicon.png?v=34">
 <!-- ?v= 是版本參數：改完前端要記得 +1。沒有它的話瀏覽器會拿快取裡的舊 app.js，
      重新部署後打開仍是舊畫面（改完 Ctrl+F5 才看得到），現場展示很容易踩到。 -->
-<link rel="stylesheet" href="/style.css?v=24">
+<link rel="stylesheet" href="/style.css?v=41">
 <!-- Plotly 走 CDN：不用 npm、不用打包，改完存檔重整就看得到 -->
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 </head>
@@ -14,7 +15,8 @@
 
 <header class="site-header">
   <div class="wrap brand">
-    <h1>財報分析，有你真好</h1>
+    <img src="/logo-full.png" class="brand-logo" alt="SYSTEX">
+    <h1>財報分析，有你蒸好</h1>
   </div>
 </header>
 
@@ -52,17 +54,20 @@
         </div>
       </div>
       <button id="reset" class="btn-ghost" title="回到預設：最新一季 vs 前一季">↺ 重置</button>
+      <button id="search" class="btn-primary" title="套用目前選的期間，並自動生成 AI 觀點">🔍 搜尋</button>
     </div>
+    <!-- 財報期（資產負債表科目，如資產負債率）沒有 ROE/NIM 等業務指標，儀表板刻意不列，
+         但沒說明的話使用者不會知道少了哪些期間、以為財報期是被忽略的 bug。 -->
+    <p class="field-note">期間僅列<strong>法說會期</strong>（ROE、NIM、手續費淨收益等業務指標）；財報期（資產負債表科目）用於跨機構比較與問答頁。</p>
 
     <div id="dash-error" class="error hidden"></div>
 
     <!-- AI 觀點總結：呼應 Hybrid RAG + Agent，讓 AI 讀完數字給一句結論 -->
     <div class="ai-summary">
       <div class="ai-summary-head">
-        <span class="ai-badge">AI 觀點</span>
-        <button id="gen-summary" class="btn-primary">生成本期總結</button>
+        <span class="ai-badge"><img src="/logo-icon.png" class="ai-badge-icon" alt="">AI 觀點</span>
       </div>
-      <p id="summary-text" class="ai-summary-body">按上方按鈕，讓 AI Agent 讀完本期指標後給出一句話結論。</p>
+      <p id="summary-text" class="ai-summary-body">選好期間後按上方「搜尋」，AI Agent 會讀完本期指標並自動給出一句話結論。</p>
     </div>
 
     <div class="section-head" id="hero-head">
@@ -114,6 +119,8 @@
       </div>
     </div>
 
+    <p class="field-note">期間 A／B 涵蓋<strong>法說會期</strong>與<strong>財報期</strong>，下拉選單已分組標示。</p>
+
     <div id="cmp-error" class="error hidden"></div>
 
     <!-- 說明文改成點開才展開的資訊框：平常只佔一行，版面清爽；
@@ -151,8 +158,8 @@
         <label for="chatPeriod">鎖定期間</label>
         <select id="chatPeriod"></select>
       </div>
-      <span class="scope-hint">選了就不用每題重打公司／期間；預設「不指定」，仍可直接把公司期間寫在問題裡。</span>
     </div>
+    <p class="field-note">選了就不用每題重打公司／期間；預設「不指定」，仍可直接把公司期間寫在問題裡。期間涵蓋<strong>法說會期、財報期、年報</strong>，下拉選單已分組標示。</p>
 
     <div class="chat-bar">
       <label class="switch">
@@ -171,7 +178,7 @@
 
     <div id="chat-log" class="chat-log">
       <p class="chat-hint">直接把公司、期間打在問題裡就好。例如：<br>
-        「中信金控 2025Q4 手續費淨收益變化多少？」　·　「為什麼下滑？」　·　「玉山和中信誰的 ROE 高？」<br>
+        「中信金控 2025Q4 手續費淨收益變化多少？」　·　「中信財報2025Q4和國泰財報2025Q4資產負債率比較」　·　「玉山和中信誰的 ROE 高？」<br>
         <span class="chat-hint-sub">牽涉到某個指標時，答案下方會一併畫出它的歷史趨勢圖。</span></p>
     </div>
 
@@ -227,11 +234,14 @@
   </section>
 
   <footer>
-    資料來源：公開資訊觀測站 · 各公司投資人關係網站　｜
-    數值由指標庫以公式計算，非 LLM 生成
+    <div class="footer-note">
+      資料來源：公開資訊觀測站 · 各公司投資人關係網站　｜
+      數值由指標庫以公式計算，非 LLM 生成
+    </div>
+    <img src="/logo-full.png" class="footer-logo" alt="SYSTEX">
   </footer>
 </main>
 
-<script src="/app.js?v=24"></script>
+<script src="/app.js?v=39"></script>
 </body>
 </html>

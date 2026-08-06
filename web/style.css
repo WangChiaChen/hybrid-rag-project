@@ -35,11 +35,13 @@ body {
 }
 
 /* ---------- Header ---------- */
-.site-header { background: var(--primary); color: #fff; padding: 18px 0; }
+.site-header { background: var(--primary); color: #fff; padding: 16px 0; }
 .wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
-.brand { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
 .brand h1 { font-size: 22px; font-weight: 700; letter-spacing: .5px; }
 .brand .tag { font-size: 13px; color: #CADCFC; }
+.brand-logo { height: 70px; width: auto; display: block; transition: transform .2s ease; }
+.brand-logo:hover { transform: scale(1.08) rotate(-2deg); }
 
 /* ---------- Nav：選中狀態要夠明確，使用者要知道自己在哪一層 ---------- */
 .nav { background: var(--card); border-bottom: 1px solid var(--border); }
@@ -83,14 +85,58 @@ body {
   font-family: var(--font);
   font-size: 15px;
   color: var(--text);
-  padding: 8px 11px;
+  padding: 8px 34px 8px 11px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: #fff;
   min-width: 152px;
   cursor: pointer;
+  /* 拿掉瀏覽器原生箭頭，換成配合深藍主題的自訂箭頭，跨瀏覽器/作業系統看起來才一致 */
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%231E3A5F' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
-.field select:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+.field select:hover { border-color: var(--primary); }
+.field select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(30, 58, 95, .15);
+}
+.field select:disabled { cursor: not-allowed; opacity: .55; }
+/* optgroup 標籤：跟一般選項拉開層次，看得出來是分類標題不是可選項目 */
+.field select optgroup {
+  font-family: var(--font);
+  font-weight: 700;
+  font-style: normal;
+  color: var(--primary);
+}
+.field select option { color: var(--text); font-weight: 400; }
+/* 期間選單旁的說明：這頁的期間選單涵蓋哪些類型（法說會期／財報期／年報），
+   不用使用者自己點開下拉選單才發現三頁範圍不一樣。跟 .info-disclosure（「只比對
+   名稱完全相同的指標」那個提示框）用同一套視覺語言——淡藍底、左側粗色條、ℹ 圖示，
+   之前純文字融在灰底背景裡對比度太低，容易被忽略。 */
+.field-note {
+  display: flex; align-items: flex-start; gap: 9px;
+  background: #F3F7FC;
+  border: 1px solid #C9D6E4;
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius);
+  padding: 11px 15px;
+  font-size: 14px; color: var(--text-2); line-height: 1.6;
+  margin: 12px 0 0;
+}
+.field-note::before {
+  content: "ℹ";
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 15px;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.field-note strong { color: var(--primary); font-weight: 700; }
 
 /* 按鈕 */
 .btn-ghost {
@@ -118,7 +164,28 @@ body {
 .ai-summary-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .ai-badge {
   font-size: 12px; font-weight: 700; color: #fff; background: var(--primary);
-  border-radius: var(--radius); padding: 3px 10px; letter-spacing: 1px;
+  border-radius: 999px; padding: 4px 12px 4px 4px; letter-spacing: 1px;
+  display: inline-flex; align-items: center; gap: 7px;
+}
+/* 跟聊天頭像用同一套圓形漸層底，兩個地方的包子圖示才是同一種「容器」 */
+.ai-badge-icon {
+  height: 24px; width: 24px; box-sizing: border-box;
+  display: block; object-fit: contain; padding: 3px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 28%, #5B9BD5, var(--primary) 75%);
+  border: 1.5px solid rgba(255, 255, 255, .3);
+  transition: transform .2s ease;
+}
+.ai-badge:hover .ai-badge-icon { transform: scale(1.15); }
+/* 讀取中：圖示輕輕上下漂浮，讓等待感有回饋
+   class 刻意不叫 .loading——那個名字在別處（第 508 行）已經是「區塊骨架文字」在用，
+   會連 padding: 40px 0 一起撞進來，把圖示撐成 82px 高的長條，跟動畫或 transform 無關。 */
+.ai-badge-icon.is-loading { animation: float-icon 1.1s ease-in-out infinite; }
+/* 問答與報告：等答案回來之前，聊天泡泡頭像也用同一顆動畫，跟 AI 觀點一致 */
+.msg.bot.is-answering::before { animation: float-icon 1.1s ease-in-out infinite; }
+@keyframes float-icon {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
 }
 .ai-summary-body { font-size: 15px; line-height: 1.75; color: var(--text); }
 .ai-summary-body.placeholder { color: var(--muted); }
@@ -495,7 +562,11 @@ body {
   padding: 12px 14px;
   font-size: 14px;
 }
-footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height: 1.7; }
+footer {
+  color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height: 1.7;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
+.footer-logo { height: 40px; width: auto; opacity: .85; }
 .hidden { display: none; }
 
 /* ---------- 問答與報告 ---------- */
@@ -530,11 +601,26 @@ footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height
   align-self: flex-start;
   background: #F6F8FA;
   border: 1px solid var(--border);
-  padding: 13px 16px;
+  padding: 13px 16px 13px 54px;
   border-radius: 12px 12px 12px 3px;
   color: var(--text);
   width: 100%;
   max-width: 88%;
+  position: relative;
+}
+/* AI 助理頭像：吉祥物小圖示＋圓形漸層底，看起來像正式的機器人頭像 */
+.msg.bot::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 11px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background:
+    url("/logo-icon.png") center 58% / 78% no-repeat,
+    radial-gradient(circle at 35% 28%, #5B9BD5, var(--primary) 75%);
+  box-shadow: 0 2px 6px rgba(15, 40, 80, .25);
 }
 .msg.bot.thinking { color: var(--muted); font-style: italic; }
 .bot-text { white-space: normal; }
@@ -723,11 +809,7 @@ footer { color: var(--muted); font-size: 12px; padding: 32px 0 44px; line-height
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 14px 16px;
-  margin: 22px 0 12px;
-}
-.chat-scope .scope-hint {
-  flex: 1 1 220px; align-self: center;
-  font-size: 12px; color: var(--muted); line-height: 1.5;
+  margin: 22px 0 0;
 }
 .chat-scope select:disabled { opacity: .55; cursor: not-allowed; }
 .scope-chip {

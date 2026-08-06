@@ -45,7 +45,7 @@ from metric_alignment import (
     norm_metric_name,
 )
 from report_generator import generate_report
-from standard_metrics import STANDARD_METRICS, _pick, align_standard, key_ratios
+from standard_metrics import DERIVED_METRICS, STANDARD_METRICS, _derive, _pick, align_standard, key_ratios
 from vector_rag import get_all_sources, query_vector_rag
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -523,7 +523,14 @@ def _infer_period(question: str, company: Optional[str]) -> Optional[str]:
     qm = re.search(r"Q\s*([1-4])", question, re.I) or re.search(r"第\s*([一二三四1-4])\s*季", question)
     q = _QUARTER_MAP.get(qm.group(1), qm.group(1)) if qm else None
     if year and q:
-        for cand in (f"{year}Q{q}", f"{year}Q{q}財報"):
+        plain, report = f"{year}Q{q}", f"{year}Q{q}財報"
+        # 同一年季會有兩個不同期間：「2025Q4」是法說會期（NIM、手續費淨收益等），
+        # 「2025Q4財報」是資產負債表期（資產總計、負債總計等）——兩邊指標幾乎不重疊
+        # （見 standard_metrics.py 的資產負債率只在財報期算得出來）。使用者問題若明講
+        # 「財報」，就該優先配財報期，不然明明打了「財報2025Q4」卻被解析成沒有資產負債
+        # 表科目的「2025Q4」，資產負債率會查無資料（實測就是這樣被卡住的）。
+        cands = (report, plain) if "財報" in question else (plain, report)
+        for cand in cands:
             if cand in ps:
                 return cand
     return _default_period(ps)
@@ -713,12 +720,44 @@ def _match_period(company, period):
 
 
 def _spec_for_text(text):
-    """看一段文字（通常是表頭）像哪個標準指標。"""
+    """看一段文字（通常是表頭）像哪個標準指標或衍生比率。"""
     t = str(text)
     for spec in STANDARD_METRICS:
         if any(re.search(p, t) for p in spec["include"]):
             return spec
+    for spec in DERIVED_METRICS:
+        if spec["label"] in t:
+            return spec
     return None
+
+
+def _pick_or_derive(company, ms, spec, period):
+    """跟 standard_metrics._pick() 介面一致，但也認得 DERIVED_METRICS。
+
+    STANDARD_METRICS 有 include/exclude，直接用 _pick() 從原始指標裡挑。
+    DERIVED_METRICS（如資產負債率）圖譜裡沒有現成節點，用 _derive() 拿兩個絕對金額
+    即時相除算出來——不接這條的話，_spec_for_text 認得出「資產負債率」這個表頭，
+    但這裡拿不到本地數字可比，交叉驗證會整欄跳過，使用者只會看到「無法以本地知識庫驗證」，
+    即使本地其實算得出來、也已經在儀表板／比較頁顯示過。
+    """
+    if "include" in spec:
+        return _pick(ms, spec, period)
+    by_name = {m["metric"]: m for m in ms}
+    v = _derive(by_name, spec)
+    if v is None and not str(period).endswith("財報"):
+        # 負債總計／資產總計這類資產負債表科目只收在「…財報」那個期間，法說會期
+        # （不帶「財報」）沒有這兩筆。EAP 的表格常把期間寫成「2025Q4」而非「2025Q4財報」，
+        # _match_period 兩個都算存在，優先配到不帶財報的那個——衍生比率就永遠算不出來、
+        # 白白跳過驗證。這裡兜底再試一次財報版。
+        report_period = f"{period}財報"
+        if report_period in list_periods(company):
+            by_name = {m["metric"]: m for m in list_metrics(company, report_period)}
+            v = _derive(by_name, spec)
+    if v is None:
+        return None
+    return {"value": round(v, 2),
+            "name": f'{spec["numerator"]} ÷ {spec["denominator"]}（衍生）',
+            "unit": spec["unit"]}
 
 
 def _significant_gap(eap_val, local_val):
@@ -735,7 +774,7 @@ def _num_near_metric(segment, spec):
     """在一段文字裡，抓「指標名稱附近」的數值（比率取 %、每股取 元）。
     優先取指標關鍵字之後最近的那個數字，避免抓到年增率等旁邊的數字。"""
     mpos = -1
-    for p in spec["include"]:
+    for p in spec.get("include") or [re.escape(spec["label"])]:
         m = re.search(p, segment, re.I)
         if m:
             mpos = m.start()
@@ -783,7 +822,7 @@ def _cross_check_prose(answer, fallback_period):
         eap_val = _num_near_metric(segment, spec)
         if eap_val is None:
             continue
-        pick = _pick(list_metrics(c, period), spec, period)
+        pick = _pick_or_derive(c, list_metrics(c, period), spec, period)
         if not pick:
             continue
         local_val = round(pick["value"], 2)
@@ -1270,6 +1309,43 @@ def cross_check_metrics(answer, company, period, unmatched=None):
         # 只看表頭會整張表都判不出單位，於是一筆都比不了。
         pre_text = text.split("\n|")[0][-120:] if "\n|" in text else ""
         table_unit = _unit_hint(pre_text)
+
+        # 「長表」：一列一筆指標，指標名稱寫在儲存格裡（欄位標題是「指標」這種泛稱），
+        # 不是像「稅後淨利」這樣直接當欄位標題（那種是下面的「寬表」邏輯處理的）。
+        # 實測問單一指標（「資產總計是多少」）EAP 常回這種格式：公司｜期間｜指標｜數值｜單位，
+        # 寬表邏輯拿標題去配 labels 一個都配不到（"指標"、"數值"這些泛稱本身不是指標名），
+        # 整張表被當成配不到任何欄位、直接跳過，於是這麼基本的問題也顯示「無法驗證」。
+        metric_col = next((i for i, h in enumerate(header) if re.search(r"指標|科目|項目", h)), None)
+        value_col = next((i for i, h in enumerate(header) if re.fullmatch(r"數值|金額|值", h.strip())), None)
+        if metric_col is not None and value_col is not None:
+            company_col = next((i for i, h in enumerate(header) if re.search(r"公司|機構", h)), None)
+            unit_col = next((i for i, h in enumerate(header) if re.fullmatch(r"單位", h.strip())), None)
+            for r in body:
+                if metric_col >= len(r) or value_col >= len(r):
+                    continue
+                raw_label = r[metric_col].strip().strip("「」")
+                label = next((l for l in labels if l == raw_label or l in raw_label), None)
+                if not label:
+                    continue
+                comp = None
+                if company_col is not None and company_col < len(r):
+                    comp = _resolve_company(r[company_col])
+                comp = comp or next((rc for rc in (_resolve_company(c) for c in r) if rc), None) or company
+                m = _NUM_WITH_UNIT.search(r[value_col])
+                if not m:
+                    continue
+                try:
+                    val = float(m.group(1).replace(",", ""))
+                except ValueError:
+                    continue
+                unit = m.group(2)
+                if not unit and unit_col is not None and unit_col < len(r):
+                    unit = r[unit_col].strip()
+                unit = unit or table_unit
+                entity = next((e for e in (_entity_in(c) for c in r) if e), None)
+                compare(comp, label, val, unit, entity=entity)
+            return out, checked
+
         for i, h in enumerate(header):
             label = next((l for l in labels if l in h), None)
             if label:
@@ -1393,7 +1469,7 @@ def cross_check_eap(answer, fallback_period):
             eap_val = _cell_to_float(cell)
             if eap_val is None:
                 continue
-            pick = _pick(ms, spec, period)
+            pick = _pick_or_derive(company, ms, spec, period)
             if not pick:
                 continue
             local_val = round(pick["value"], 2)

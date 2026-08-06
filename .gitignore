@@ -12,6 +12,8 @@ outputs/*.json
 uploads_temp/
 .DS_Store
 downloads/
+# 官方財報原始 PDF，跟 downloads/ 同性質——原始下載檔不進版控
+PPT/
 
 # 匯出的產生物，都能用腳本重跑出來，不進版控（進了反而容易拿到過期的版本）。
 # 注意：gitignore 只認「整行開頭的 #」，寫成行尾註解會被當成 pattern 的一部分而失效。
@@ -26,6 +28,8 @@ eap_metric_edges.csv
 outputs/transcript_*.pdf
 # make_eap_upload_pdfs.py（年報上傳版；原始 PDF 通常可直接上傳，這是亂碼時的備援）
 outputs/annual_upload_*.pdf
+# make_eap_metric_upload_pdfs.py / make_all_metrics_pdf.py（結構化指標上傳版）
+outputs/eap_upload_*.pdf
 
 # Claude Code 本機工具設定（非共用）
 .claude/settings.local.json
